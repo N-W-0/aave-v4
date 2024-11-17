@@ -14,16 +14,17 @@ contract LiquidityHubTest is BaseTest {
     hub.addReserve(
       LiquidityHub.ReserveConfig({
         borrowModule: address(bm),
-        lt: 0,
-        lb: 0,
-        rf: 0,
         decimals: 18,
         active: true,
-        borrowable: false,
         supplyCap: type(uint256).max,
-        borrowCap: type(uint256).max,
+        drawCap: type(uint256).max,
         liquidityPremium: 10_00
       }),
+      address(dai)
+    );
+    bm.addReserve(
+      0,
+      BorrowModule.ReserveConfig({lt: 0, lb: 0, rf: 0, borrowable: true}),
       address(dai)
     );
     MockPriceOracle(address(oracle)).setAssetPrice(0, 1e8);
@@ -32,19 +33,51 @@ contract LiquidityHubTest is BaseTest {
     hub.addReserve(
       LiquidityHub.ReserveConfig({
         borrowModule: address(bm),
-        lt: 0,
-        lb: 0,
-        rf: 0,
         decimals: 18,
         active: true,
-        borrowable: false,
         supplyCap: type(uint256).max,
-        borrowCap: type(uint256).max,
+        drawCap: type(uint256).max,
         liquidityPremium: 0
       }),
       address(eth)
     );
+    bm.addReserve(
+      1,
+      BorrowModule.ReserveConfig({lt: 0, lb: 0, rf: 0, borrowable: true}),
+      address(eth)
+    );
     MockPriceOracle(address(oracle)).setAssetPrice(1, 2000e8);
+
+    // Add dai again but with basic credit line borrow module
+    uint256 daiCreditLineAssetId = 2;
+    // flat 5% interest rate
+    creditLineIRStrategy.setInterestRateParams(
+      daiCreditLineAssetId,
+      IDefaultInterestRateStrategy.InterestRateData({
+        optimalUsageRatio: 5000, // 50.00%
+        baseVariableBorrowRate: 500, // 5.00%
+        variableRateSlope1: 500, // 5.00%
+        variableRateSlope2: 500 // 5.00%
+      })
+    );
+    bmcl = new MockBorrowModuleCreditLine(address(hub), address(creditLineIRStrategy));
+    hub.addReserve(
+      LiquidityHub.ReserveConfig({
+        borrowModule: address(bmcl),
+        decimals: 18,
+        active: true,
+        supplyCap: type(uint256).max,
+        drawCap: type(uint256).max,
+        liquidityPremium: 10_00
+      }),
+      address(dai)
+    );
+    bmcl.addReserve(
+      daiCreditLineAssetId,
+      MockBorrowModuleCreditLine.ReserveConfig({lt: 0, lb: 0, rf: 0, borrowable: true}),
+      address(dai)
+    );
+    MockPriceOracle(address(oracle)).setAssetPrice(daiCreditLineAssetId, 1e8);
 
     vm.warp(block.timestamp + 20);
   }
@@ -168,7 +201,7 @@ contract LiquidityHubTest is BaseTest {
     uint256 newBorrowRate = 0.1e27; // 10.00%
     vm.mockCall(
       address(bm),
-      abi.encodeWithSelector(IBorrowModule.calculateInterestRates.selector),
+      abi.encodeWithSelector(IBorrowModule.getInterestRate.selector),
       abi.encode(newBorrowRate)
     );
 
@@ -186,10 +219,8 @@ contract LiquidityHubTest is BaseTest {
 
     // state update due to reserve operation
     // TODO helper for reserve state update
-    uint256 cumulated = MathUtils
-      .calculateLinearInterest(newBorrowRate, uint40(reserveData.lastUpdateTimestamp))
-      .rayMul(reserveData.totalAssets);
-    uint256 newTotalAssets = reserveData.totalAssets + cumulated;
+    // total assets do not change because no interest acc yet
+    uint256 newTotalAssets = reserveData.totalAssets;
 
     uint256 user2SupplyShares = 1; // minimum for 1 share
     uint256 user2SupplyAssets = user2SupplyShares.toAssetsUp(
@@ -208,8 +239,10 @@ contract LiquidityHubTest is BaseTest {
     // reserve update
     userData = hub.getUser(assetId, USER1);
     reserveData = hub.getReserve(assetId);
+
     assertEq(reserveData.totalShares, amount + user2SupplyShares, 'wrong total shares');
     assertEq(reserveData.totalAssets, newTotalAssets + user2SupplyAssets, 'wrong total assets');
+    assertEq(reserveData.totalDrawn, 0, 'wrong total drawn');
     assertEq(userData.shares, amount);
     assertEq(hub.getUserBalance(assetId, USER1), newUserAssets, 'wrong user assets');
   }
@@ -224,7 +257,11 @@ contract LiquidityHubTest is BaseTest {
   /// forge-config: default.fuzz.max-test-rejects = 1
   /// User makes a first supply, which increases overtime as yield accrues
   // TODO: to be fixed, there is precision loss
-  function skip_test_fuzz_supply_index_increase(uint256 assetId, address user, uint256 amount) public {
+  function skip_test_fuzz_supply_index_increase(
+    uint256 assetId,
+    address user,
+    uint256 amount
+  ) public {
     if (user == address(hub) || user == address(0)) return;
     assetId = bound(assetId, 0, hub.reserveCount() - 1);
     amount = bound(amount, 1, type(uint128).max);
@@ -261,7 +298,7 @@ contract LiquidityHubTest is BaseTest {
       uint256 newBorrowRate = (borrowRateChange * i) % 2e27; // randomize, 200.00% max
       vm.mockCall(
         address(bm),
-        abi.encodeWithSelector(IBorrowModule.calculateInterestRates.selector),
+        abi.encodeWithSelector(IBorrowModule.getInterestRate.selector),
         abi.encode(newBorrowRate)
       );
 
@@ -375,12 +412,12 @@ contract LiquidityHubTest is BaseTest {
 
     vm.prank(USER1);
 
-    vm.expectRevert(Errors.NOT_AVAILABLE_LIQUIDITY);
+    vm.expectRevert(TestErrors.NOT_AVAILABLE_LIQUIDITY);
     hub.withdraw(assetId, amount + 1, USER1);
 
     // advance time, but no accumulation
     vm.warp(block.timestamp + 1e18);
-    vm.expectRevert(Errors.NOT_AVAILABLE_LIQUIDITY);
+    vm.expectRevert(TestErrors.NOT_AVAILABLE_LIQUIDITY);
     hub.withdraw(assetId, amount + 1, USER1);
 
     reserveData = hub.getReserve(assetId);
@@ -458,9 +495,126 @@ contract LiquidityHubTest is BaseTest {
     assertEq(hub.getUserRiskPremium(USER1), calcRiskPremium);
   }
 
+  function test_first_borrow() public {
+    uint256 daiId = 0;
+    uint256 ethId = 1;
+    uint256 daiAmount = 100e18;
+    uint256 ethAmount = 10e18;
+
+    // User1 supply eth
+    deal(address(eth), USER1, ethAmount);
+    Utils.supply(vm, hub, ethId, USER1, ethAmount, USER1);
+
+    // User2 supply dai
+    deal(address(dai), USER2, daiAmount);
+    Utils.supply(vm, hub, daiId, USER2, daiAmount, USER2);
+
+    LiquidityHub.Reserve memory daiData = hub.getReserve(daiId);
+    LiquidityHub.Reserve memory ethData = hub.getReserve(ethId);
+    LiquidityHub.UserConfig memory userDaiData1 = hub.getUser(daiId, USER1);
+    LiquidityHub.UserConfig memory userEthData1 = hub.getUser(ethId, USER1);
+    LiquidityHub.UserConfig memory userDaiData2 = hub.getUser(daiId, USER2);
+    LiquidityHub.UserConfig memory userEthData2 = hub.getUser(ethId, USER2);
+
+    assertEq(daiData.totalShares, daiAmount);
+    assertEq(daiData.totalAssets, daiAmount);
+    assertEq(daiData.totalDrawn, 0);
+    assertEq(ethData.totalShares, ethAmount);
+    assertEq(ethData.totalAssets, ethAmount);
+    assertEq(ethData.totalDrawn, 0);
+
+    assertEq(userDaiData1.shares, 0);
+    assertEq(hub.getUserBalance(daiId, USER1), 0);
+    assertEq(userEthData1.shares, ethAmount);
+    assertEq(hub.getUserBalance(ethId, USER1), ethAmount);
+
+    assertEq(userDaiData2.shares, daiAmount);
+    assertEq(hub.getUserBalance(daiId, USER2), daiAmount);
+    assertEq(userEthData2.shares, 0);
+    assertEq(hub.getUserBalance(ethId, USER2), 0);
+
+    assertEq(dai.balanceOf(USER1), 0);
+
+    // User1 draw half of dai reserve liquidity
+    vm.prank(USER1);
+    IBorrowModule(daiData.config.borrowModule).borrow(daiId, daiAmount / 2);
+
+    daiData = hub.getReserve(daiId);
+    ethData = hub.getReserve(ethId);
+    userDaiData1 = hub.getUser(daiId, USER1);
+    userEthData1 = hub.getUser(ethId, USER1);
+    userDaiData2 = hub.getUser(daiId, USER2);
+    userEthData2 = hub.getUser(ethId, USER2);
+
+    assertEq(daiData.totalShares, daiAmount);
+    assertEq(daiData.totalAssets, daiAmount);
+    assertEq(daiData.totalDrawn, daiAmount / 2);
+    assertEq(ethData.totalShares, ethAmount);
+    assertEq(ethData.totalAssets, ethAmount);
+    assertEq(ethData.totalDrawn, 0);
+
+    assertEq(userDaiData1.shares, 0);
+    assertEq(hub.getUserBalance(daiId, USER1), 0);
+    assertEq(userEthData1.shares, ethAmount);
+    assertEq(hub.getUserBalance(ethId, USER1), ethAmount);
+
+    assertEq(userDaiData2.shares, daiAmount);
+    assertEq(hub.getUserBalance(daiId, USER2), daiAmount);
+    assertEq(userEthData2.shares, 0);
+    assertEq(hub.getUserBalance(ethId, USER2), 0);
+
+    assertEq(dai.balanceOf(USER1), daiAmount / 2);
+  }
+
+  function test_revert_draw_reserve_not_active() public {
+    uint256 daiId = 2;
+    uint256 drawnAmount = 1;
+    _updateActive(daiId, false);
+    vm.prank(USER1);
+    vm.expectRevert(TestErrors.RESERVE_NOT_ACTIVE);
+    IBorrowModule(address(bmcl)).borrow(daiId, drawnAmount);
+  }
+
+  function test_revert_draw_invalid_amount() public {
+    uint256 daiId = 2;
+    uint256 drawnAmount = 1;
+    vm.prank(USER1);
+    vm.expectRevert(TestErrors.INVALID_AMOUNT);
+    IBorrowModule(address(bmcl)).borrow(daiId, drawnAmount);
+  }
+
+  function test_revert_draw_cap_exceeded() public {
+    uint256 daiId = 2;
+    uint256 daiAmount = 100e18;
+    uint256 drawCap = 1;
+    uint256 drawnAmount = drawCap + 1;
+
+    _updateDrawCap(daiId, drawCap);
+
+    // User2 supply dai
+    deal(address(dai), USER2, daiAmount);
+    Utils.supply(vm, hub, daiId, USER2, daiAmount, USER2);
+
+    vm.prank(USER1);
+    vm.expectRevert(TestErrors.CAP_EXCEEDED);
+    IBorrowModule(address(bmcl)).borrow(daiId, drawnAmount);
+  }
+
   function _updateLiquidityPremium(uint256 assetId, uint256 newLiquidityPremium) internal {
     LiquidityHub.ReserveConfig memory reserveConfig = hub.getReserve(assetId).config;
     reserveConfig.liquidityPremium = newLiquidityPremium;
+    hub.updateReserve(assetId, reserveConfig);
+  }
+
+  function _updateActive(uint256 assetId, bool newActive) internal {
+    LiquidityHub.ReserveConfig memory reserveConfig = hub.getReserve(assetId).config;
+    reserveConfig.active = newActive;
+    hub.updateReserve(assetId, reserveConfig);
+  }
+
+  function _updateDrawCap(uint256 assetId, uint256 newDrawCap) internal {
+    LiquidityHub.ReserveConfig memory reserveConfig = hub.getReserve(assetId).config;
+    reserveConfig.drawCap = newDrawCap;
     hub.updateReserve(assetId, reserveConfig);
   }
 }
