@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import 'forge-std/Test.sol';
-import 'src/contracts/LiquidityHub.sol';
-import 'src/contracts/Spoke.sol';
-import 'src/dependencies/openzeppelin/IERC20.sol';
+import {Vm} from 'forge-std/Vm.sol';
+import {LiquidityHub, DataTypes} from 'src/contracts/LiquidityHub.sol';
+import {Spoke, ISpoke} from 'src/contracts/Spoke.sol';
 
 library Utils {
+  Vm internal constant vm = Vm(address(uint160(uint256(keccak256('hevm cheat code')))));
+
   // hub
   function addAssetAndSpokes(
     LiquidityHub hub,
@@ -25,63 +26,60 @@ library Utils {
   }
 
   function supply(
-    Vm vm,
     LiquidityHub hub,
     uint256 assetId,
     address spoke,
     uint256 amount,
-    address onBehalfOf
+    uint256 riskPremiumRad,
+    address user,
+    address to // todo: implement
   ) internal {
-    address asset = hub.assetsList(assetId);
-    vm.startPrank(spoke);
-    IERC20(asset).transfer(address(hub), amount);
-    hub.supply(assetId, amount, 0);
+    vm.startPrank(user);
+    hub.assetsList(assetId).approve(address(hub), amount);
     vm.stopPrank();
+
+    vm.prank(spoke);
+    hub.supply({assetId: assetId, amount: amount, riskPremiumRad: riskPremiumRad, supplier: user});
   }
 
   function draw(
-    Vm vm,
     LiquidityHub hub,
     uint256 assetId,
     address spoke,
+    address to,
     uint256 amount,
-    address onBehalfOf
+    uint256 riskPremiumRad,
+    address onBehalfOf // todo: implement
   ) internal {
-    vm.startPrank(spoke);
-    hub.draw(assetId, spoke, amount, 0);
-    vm.stopPrank();
+    vm.prank(spoke);
+    hub.draw({assetId: assetId, amount: amount, riskPremiumRad: riskPremiumRad, to: to});
   }
 
   function withdraw(
-    Vm vm,
     LiquidityHub hub,
     uint256 assetId,
     address spoke,
     uint256 amount,
+    uint256 riskPremiumRad,
     address to
   ) internal {
-    vm.startPrank(spoke);
-    // TODO: risk premium
-    hub.withdraw(assetId, to, amount, 0);
-    vm.stopPrank();
+    vm.prank(spoke);
+    hub.withdraw({assetId: assetId, amount: amount, riskPremiumRad: riskPremiumRad, to: to});
   }
 
   function borrow(
-    Vm vm,
     Spoke spoke,
     uint256 assetId,
     address user,
     uint256 amount,
     address onBehalfOf
   ) internal {
-    vm.startPrank(user);
+    vm.prank(user);
     spoke.borrow(assetId, user, amount);
-    vm.stopPrank();
   }
 
   // spoke
   function spokeSupply(
-    Vm vm,
     LiquidityHub hub,
     Spoke spoke,
     uint256 assetId,
@@ -89,14 +87,12 @@ library Utils {
     uint256 amount,
     address onBehalfOf
   ) internal {
-    address asset = hub.assetsList(assetId);
     vm.startPrank(user);
-    IERC20(asset).approve(address(spoke), amount);
+    hub.assetsList(assetId).approve(address(hub), amount);
     spoke.supply(assetId, amount);
     vm.stopPrank();
   }
   function setUsingAsCollateral(
-    Vm vm,
     Spoke spoke,
     address user,
     uint256 assetId,
