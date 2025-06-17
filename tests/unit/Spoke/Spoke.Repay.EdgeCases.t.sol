@@ -31,7 +31,7 @@ contract SpokeRepayEdgeCaseTest is SpokeBase {
 
     // repay partial premium debt
     vm.assume(bobDebt.premiumDebt > 1);
-    uint256 daiRepayAmount = bound(vm.randomUint(), 1, bobDebt.premiumDebt - 1);
+    uint256 daiRepayAmount = vm.randomUint(1, bobDebt.premiumDebt - 1);
 
     (uint256 baseToRestore, uint256 premiumToRestore) = _calculateExactRestoreAmount(
       bobDebt.baseDebt,
