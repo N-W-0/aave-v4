@@ -33,9 +33,9 @@ import {WETH9} from 'src/dependencies/weth/WETH9.sol';
 
 abstract contract Base is Test {
   using WadRayMathExtended for uint256;
-  using PercentageMathExtended for uint256;
   using SharesMath for uint256;
   using PercentageMath for uint256;
+  using PercentageMathExtended for uint256;
   using SafeCast for *;
 
   uint256 internal constant MAX_SUPPLY_AMOUNT = 1e30;
@@ -870,20 +870,15 @@ abstract contract Base is Test {
     return spoke.getReserve(reserveId);
   }
 
-  function getAssetInfo(uint256 assetId) internal pure returns (DataTypes.Asset memory) {
-    revert('implement me');
+  function getSpokeInfo(
+    uint256 assetId,
+    address spoke
+  ) internal view returns (DataTypes.SpokeData memory) {
+    return hub.getSpoke(assetId, spoke);
+  }
 
-    // DataTypes.Asset memory asset;
-    // asset.id = assetId;
-    // asset.suppliedShares = hub.getAssetSuppliedShares(assetId);
-    // asset.availableLiquidity = hub.getAvailableLiquidity(assetId);
-    // (asset.baseDebt, asset.outstandingPremium) = hub.getAssetDebt(assetId);
-    // asset.baseBorrowIndex = hub.getAsset(assetId).baseBorrowIndex;
-    // asset.baseBorrowRate = hub.getBaseInterestRate(assetId);
-    // asset.riskPremium = hub.getAssetRiskPremium(assetId);
-    // asset.lastUpdateTimestamp = hub.getAsset(assetId).lastUpdateTimestamp;
-    // asset.config = hub.getAssetConfig(assetId);
-    // return asset;
+  function getAssetInfo(uint256 assetId) internal view returns (DataTypes.Asset memory) {
+    return hub.getAsset(assetId);
   }
 
   function getAssetByReserveId(
@@ -1067,6 +1062,208 @@ abstract contract Base is Test {
     );
   }
 
+  function _assertUserDebt(
+    ISpoke spoke,
+    uint256 reserveId,
+    address user,
+    uint256 expectedBaseDebt,
+    uint256 expectedPremiumDebt,
+    string memory label
+  ) internal view {
+    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = spoke.getUserDebt(reserveId, user);
+    assertApproxEqAbs(actualBaseDebt, expectedBaseDebt, 1, string.concat('user base debt ', label));
+    assertApproxEqAbs(
+      actualPremiumDebt,
+      expectedPremiumDebt,
+      2,
+      string.concat('user premium debt ', label)
+    );
+    assertApproxEqAbs(
+      spoke.getUserTotalDebt(reserveId, user),
+      expectedBaseDebt + expectedPremiumDebt,
+      2,
+      string.concat('user total debt ', label)
+    );
+  }
+
+  function _assertReserveDebt(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedBaseDebt,
+    uint256 expectedPremiumDebt,
+    string memory label
+  ) internal view {
+    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = spoke.getReserveDebt(reserveId);
+    assertApproxEqAbs(
+      actualBaseDebt,
+      expectedBaseDebt,
+      1,
+      string.concat('reserve base debt ', label)
+    );
+    assertApproxEqAbs(
+      actualPremiumDebt,
+      expectedPremiumDebt,
+      2,
+      string.concat('reserve premium debt ', label)
+    );
+    assertApproxEqAbs(
+      spoke.getReserveTotalDebt(reserveId),
+      expectedBaseDebt + expectedPremiumDebt,
+      2,
+      string.concat('reserve total debt ', label)
+    );
+  }
+
+  function _assertSpokeDebt(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedBaseDebt,
+    uint256 expectedPremiumDebt,
+    string memory label
+  ) internal view {
+    uint256 assetId = spoke.getReserve(reserveId).assetId;
+    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = hub.getSpokeDebt(assetId, address(spoke));
+    assertApproxEqAbs(
+      actualBaseDebt,
+      expectedBaseDebt,
+      1,
+      string.concat('spoke base debt ', label)
+    );
+    assertApproxEqAbs(
+      actualPremiumDebt,
+      expectedPremiumDebt,
+      2,
+      string.concat('spoke premium debt ', label)
+    );
+    assertApproxEqAbs(
+      hub.getSpokeTotalDebt(assetId, address(spoke)),
+      expectedBaseDebt + expectedPremiumDebt,
+      2,
+      string.concat('spoke total debt ', label)
+    );
+  }
+
+  function _assertAssetDebt(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedBaseDebt,
+    uint256 expectedPremiumDebt,
+    string memory label
+  ) internal view {
+    uint256 assetId = spoke.getReserve(reserveId).assetId;
+    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = hub.getAssetDebt(assetId);
+    assertApproxEqAbs(
+      actualBaseDebt,
+      expectedBaseDebt,
+      1,
+      string.concat('asset base debt ', label)
+    );
+    assertApproxEqAbs(
+      actualPremiumDebt,
+      expectedPremiumDebt,
+      2,
+      string.concat('asset premium debt ', label)
+    );
+    assertApproxEqAbs(
+      hub.getAssetTotalDebt(assetId),
+      expectedBaseDebt + expectedPremiumDebt,
+      2,
+      string.concat('asset total debt ', label)
+    );
+  }
+
+  function _assertSingleUserProtocolDebt(
+    ISpoke spoke,
+    uint256 reserveId,
+    address user,
+    uint256 expectedBaseDebt,
+    uint256 expectedPremiumDebt,
+    string memory label
+  ) internal view {
+    _assertUserDebt(spoke, reserveId, user, expectedBaseDebt, expectedPremiumDebt, label);
+
+    _assertReserveDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
+
+    _assertSpokeDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
+
+    _assertAssetDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
+  }
+
+  function _assertUserSupply(
+    ISpoke spoke,
+    uint256 reserveId,
+    address user,
+    uint256 expectedSuppliedAmount,
+    string memory label
+  ) internal view {
+    assertApproxEqAbs(
+      spoke.getUserSuppliedAmount(reserveId, user),
+      expectedSuppliedAmount,
+      2,
+      string.concat('user supplied amount ', label)
+    );
+  }
+
+  function _assertReserveSupply(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedSuppliedAmount,
+    string memory label
+  ) internal view {
+    assertApproxEqAbs(
+      spoke.getReserveSuppliedAmount(reserveId),
+      expectedSuppliedAmount,
+      2,
+      string.concat('reserve supplied amount ', label)
+    );
+  }
+
+  function _assertSpokeSupply(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedSuppliedAmount,
+    string memory label
+  ) internal view {
+    uint256 assetId = spoke.getReserve(reserveId).assetId;
+    assertApproxEqAbs(
+      hub.getSpokeSuppliedAmount(assetId, address(spoke)),
+      expectedSuppliedAmount,
+      2,
+      string.concat('spoke supplied amount ', label)
+    );
+  }
+
+  function _assertAssetSupply(
+    ISpoke spoke,
+    uint256 reserveId,
+    uint256 expectedSuppliedAmount,
+    string memory label
+  ) internal view {
+    uint256 assetId = spoke.getReserve(reserveId).assetId;
+    assertApproxEqAbs(
+      hub.getAssetSuppliedAmount(assetId),
+      expectedSuppliedAmount,
+      2,
+      string.concat('asset supplied amount ', label)
+    );
+  }
+
+  function _assertSingleUserProtocolSupply(
+    ISpoke spoke,
+    uint256 reserveId,
+    address user,
+    uint256 expectedSuppliedAmount,
+    string memory label
+  ) internal view {
+    _assertUserSupply(spoke, reserveId, user, expectedSuppliedAmount, label);
+
+    _assertReserveSupply(spoke, reserveId, expectedSuppliedAmount, label);
+
+    _assertSpokeSupply(spoke, reserveId, expectedSuppliedAmount, label);
+
+    _assertAssetSupply(spoke, reserveId, expectedSuppliedAmount, label);
+  }
+
   function _convertAmountToBaseCurrency(
     uint256 assetId,
     uint256 amount
@@ -1217,6 +1414,24 @@ abstract contract Base is Test {
     newBaseDebt = initialDrawnShares.rayMulUp(newDebtIndex);
   }
 
+  /// @dev Calculate expected base debt based on specified borrow rate
+  function _calculateExpectedBaseDebt(
+    uint256 initialDebt,
+    uint256 borrowRate,
+    uint40 startTime
+  ) internal view returns (uint256) {
+    return MathUtils.calculateLinearInterest(borrowRate, startTime).rayMulUp(initialDebt);
+  }
+
+  /// @dev Calculate expected premium debt based on change in base debt and user rp
+  function _calculateExpectedPremiumDebt(
+    uint256 initialBaseDebt,
+    uint256 currentBaseDebt,
+    uint256 userRiskPremium
+  ) internal pure returns (uint256) {
+    return (currentBaseDebt - initialBaseDebt).percentMulUp(userRiskPremium);
+  }
+
   /// @dev Helper function to get asset base debt
   function getAssetBaseDebt(uint256 assetId) internal view returns (uint256) {
     (uint256 baseDebt, ) = hub.getAssetDebt(assetId);
@@ -1264,142 +1479,6 @@ abstract contract Base is Test {
 
   function _randomBps() internal returns (uint16) {
     return vm.randomUint(0, PercentageMath.PERCENTAGE_FACTOR).toUint16();
-  }
-
-  function _assertUserDebt(
-    ISpoke spoke,
-    uint256 reserveId,
-    address user,
-    uint256 expectedBaseDebt,
-    uint256 expectedPremiumDebt,
-    string memory label
-  ) internal view {
-    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = spoke.getUserDebt(reserveId, user);
-    assertApproxEqAbs(actualBaseDebt, expectedBaseDebt, 1, string.concat('user base debt ', label));
-    assertApproxEqAbs(
-      actualPremiumDebt,
-      expectedPremiumDebt,
-      1,
-      string.concat('user premium debt ', label)
-    );
-    assertApproxEqAbs(
-      spoke.getUserTotalDebt(reserveId, user),
-      expectedBaseDebt + expectedPremiumDebt,
-      1,
-      string.concat('user total debt ', label)
-    );
-  }
-
-  function _assertReserveDebt(
-    ISpoke spoke,
-    uint256 reserveId,
-    uint256 expectedBaseDebt,
-    uint256 expectedPremiumDebt,
-    string memory label
-  ) internal view {
-    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = spoke.getReserveDebt(reserveId);
-    assertApproxEqAbs(
-      actualBaseDebt,
-      expectedBaseDebt,
-      1,
-      string.concat('reserve base debt ', label)
-    );
-    assertApproxEqAbs(
-      actualPremiumDebt,
-      expectedPremiumDebt,
-      1,
-      string.concat('reserve premium debt ', label)
-    );
-    assertApproxEqAbs(
-      spoke.getReserveTotalDebt(reserveId),
-      expectedBaseDebt + expectedPremiumDebt,
-      1,
-      string.concat('reserve total debt ', label)
-    );
-  }
-
-  function _assertSpokeDebt(
-    ISpoke spoke,
-    uint256 reserveId,
-    uint256 expectedBaseDebt,
-    uint256 expectedPremiumDebt,
-    string memory label
-  ) internal view {
-    uint256 assetId = spoke.getReserve(reserveId).assetId;
-    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = hub.getSpokeDebt(assetId, address(spoke));
-    assertApproxEqAbs(
-      actualBaseDebt,
-      expectedBaseDebt,
-      1,
-      string.concat('spoke base debt ', label)
-    );
-    assertApproxEqAbs(
-      actualPremiumDebt,
-      expectedPremiumDebt,
-      1,
-      string.concat('spoke premium debt ', label)
-    );
-    assertApproxEqAbs(
-      hub.getSpokeTotalDebt(assetId, address(spoke)),
-      expectedBaseDebt + expectedPremiumDebt,
-      1,
-      string.concat('spoke total debt ', label)
-    );
-  }
-
-  function _assertAssetDebt(
-    ISpoke spoke,
-    uint256 reserveId,
-    uint256 expectedBaseDebt,
-    uint256 expectedPremiumDebt,
-    string memory label
-  ) internal view {
-    uint256 assetId = spoke.getReserve(reserveId).assetId;
-    (uint256 actualBaseDebt, uint256 actualPremiumDebt) = hub.getAssetDebt(assetId);
-    assertApproxEqAbs(
-      actualBaseDebt,
-      expectedBaseDebt,
-      1,
-      string.concat('asset base debt ', label)
-    );
-    assertApproxEqAbs(
-      actualPremiumDebt,
-      expectedPremiumDebt,
-      1,
-      string.concat('asset premium debt ', label)
-    );
-    assertApproxEqAbs(
-      hub.getAssetTotalDebt(assetId),
-      expectedBaseDebt + expectedPremiumDebt,
-      1,
-      string.concat('asset total debt ', label)
-    );
-  }
-
-  function _assertSingleUserProtocolDebt(
-    ISpoke spoke,
-    uint256 reserveId,
-    address user,
-    uint256 expectedBaseDebt,
-    uint256 expectedPremiumDebt,
-    string memory label
-  ) internal view {
-    _assertUserDebt(spoke, reserveId, user, expectedBaseDebt, expectedPremiumDebt, label);
-
-    _assertReserveDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
-
-    _assertSpokeDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
-
-    _assertAssetDebt(spoke, reserveId, expectedBaseDebt, expectedPremiumDebt, label);
-  }
-
-  /// @dev Calculate expected base debt based on specified borrow rate
-  function _calculateExpectedBaseDebt(
-    uint256 initialDebt,
-    uint256 borrowRate,
-    uint40 startTime
-  ) internal view returns (uint256) {
-    return MathUtils.calculateLinearInterest(borrowRate, startTime).rayMulUp(initialDebt);
   }
 
   function _calculateExpectedFees(
