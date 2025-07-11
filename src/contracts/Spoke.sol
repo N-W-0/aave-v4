@@ -24,6 +24,7 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
   using WadRayMath for uint256;
   using WadRayMathExtended for uint256;
   using PercentageMathExtended for uint256;
+  using PercentageMathExtended for uint16;
   using KeyValueListInMemory for KeyValueListInMemory.List;
   using LiquidationLogic for DataTypes.LiquidationConfig;
   using PositionStatus for DataTypes.PositionStatus;
@@ -124,7 +125,7 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
     uint256 reserveId,
     DataTypes.ReserveConfig calldata config
   ) external restricted {
-    // TODO: AccessControl, More sophisticated
+    // TODO: More sophisticated
     DataTypes.Reserve storage reserve = _reserves[reserveId];
     require(reserve.underlying != address(0), ReserveNotListed());
     _validateReserveConfig(config);
@@ -137,7 +138,7 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
     DataTypes.DynamicReserveConfig calldata dynamicConfig
   ) external restricted {
     _validateDynamicReserveConfig(dynamicConfig);
-    // TODO: AccessControl, More sophisticated
+    // TODO: More sophisticated
     DataTypes.Reserve storage reserve = _reserves[reserveId];
     uint16 nextConfigKey;
     // @dev overflow is desired, we implicitly invalidate & override stale config
@@ -507,13 +508,14 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
 
   function getVariableLiquidationBonus(
     uint256 reserveId,
+    address user,
     uint256 healthFactor
   ) public view returns (uint256) {
     // if healthFactorForMaxBonus is 0, always returns liquidationBonus
     return
       _liquidationConfig.calculateVariableLiquidationBonus(
         healthFactor,
-        _reserves[reserveId].config.liquidationBonus,
+        _dynamicConfig[reserveId][_userPositions[user][reserveId].configKey].liquidationBonus,
         HEALTH_FACTOR_LIQUIDATION_THRESHOLD
       );
   }
@@ -631,10 +633,6 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
   }
 
   function _validateReserveConfig(DataTypes.ReserveConfig calldata config) internal pure {
-    require(
-      config.liquidationBonus >= PercentageMathExtended.PERCENTAGE_FACTOR,
-      InvalidLiquidationBonus()
-    ); // min 100.00%
     require(config.liquidityPremium <= MAX_LIQUIDITY_PREMIUM, InvalidLiquidityPremium()); // max 1000.00%
     require(
       config.liquidationFee <= PercentageMathExtended.PERCENTAGE_FACTOR,
@@ -649,6 +647,15 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
       config.collateralFactor <= PercentageMathExtended.PERCENTAGE_FACTOR,
       InvalidCollateralFactor()
     ); // max 100.00%
+    require(
+      config.liquidationBonus >= PercentageMathExtended.PERCENTAGE_FACTOR,
+      InvalidLiquidationBonus()
+    ); // min 100.00%
+    require(
+      config.collateralFactor.percentMulUp(config.liquidationBonus) <=
+        PercentageMathExtended.PERCENTAGE_FACTOR,
+      IncompatibleCollateralFactorAndLiquidationBonus()
+    ); // Enforces that at moment loan is taken, there should be enough collateral to cover liquidation
   }
 
   function _validateLiquidationConfig(DataTypes.LiquidationConfig calldata config) internal pure {
@@ -1007,12 +1014,12 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
         ++reserveId;
       }
     }
-    emit UserDynamicConfigRefreshed(user);
+    emit UserDynamicConfigRefreshedAll(user);
   }
 
   function _refreshDynamicConfig(address user, uint256 reserveId) internal {
     _userPositions[user][reserveId].configKey = _reserves[reserveId].dynamicConfigKey;
-    emit UserDynamicConfigRefreshed(user, reserveId);
+    emit UserDynamicConfigRefreshedSingle(user, reserveId);
   }
 
   /// @return collateralAsset The address of the underlying asset used as collateral, to receive as result of the liquidation.
@@ -1277,6 +1284,7 @@ contract Spoke is ISpoke, Multicall, AccessManaged {
     vars.debtAssetUnit = 10 ** debtReserve.decimals;
     vars.liquidationBonus = getVariableLiquidationBonus(
       vars.collateralReserveId,
+      user,
       vars.healthFactor
     );
     vars.closeFactor = _liquidationConfig.closeFactor;
