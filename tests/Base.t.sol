@@ -1181,11 +1181,6 @@ abstract contract Base is Test {
     return spoke.getUserSuppliedAmount(reserveId, user);
   }
 
-  /// @dev Helper function to calculate asset amount corresponding to single drawn share
-  function minimumAssetsPerDrawnShare(uint256 assetId) internal view returns (uint256) {
-    return minimumAssetsPerDrawnShare(hub1, assetId);
-  }
-
   /// @dev Helper function to calculate asset amount corresponding to single added share
   function minimumAssetsPerAddedShare(IHub hub, uint256 assetId) internal view returns (uint256) {
     return hub.previewAddByShares(assetId, 1);
@@ -1255,7 +1250,7 @@ abstract contract Base is Test {
     uint256 assetId = spoke.getReserve(reserveId).assetId;
     return
       (amount * oracle.getReservePrice(reserveId).toWad()) /
-      (10 ** hub1.getAsset(assetId).decimals);
+      (10 ** spoke.getReserve(reserveId).hub.getAsset(assetId).decimals);
   }
 
   /// @notice Convert 1 asset amount to equivalent amount in another asset.
@@ -2085,8 +2080,8 @@ abstract contract Base is Test {
 
   function _assertDynamicConfigRefreshEventsNotEmitted() internal {
     _assertEventsNotEmitted(
-      ISpoke.UserDynamicConfigRefreshedAll.selector,
-      ISpoke.UserDynamicConfigRefreshedSingle.selector
+      ISpoke.RefreshAllUserDynamicConfig.selector,
+      ISpoke.RefreshSingleUserDynamicConfig.selector
     );
   }
 
