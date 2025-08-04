@@ -5,22 +5,24 @@ import {EnumerableSet} from 'src/dependencies/openzeppelin/EnumerableSet.sol';
 import {SafeERC20} from 'src/dependencies/openzeppelin/SafeERC20.sol';
 import {IERC20} from 'src/dependencies/openzeppelin/IERC20.sol';
 import {AccessManaged} from 'src/dependencies/openzeppelin/AccessManaged.sol';
-import {ILiquidityHubBase, ILiquidityHub} from 'src/interfaces/ILiquidityHub.sol';
-import {IAssetInterestRateStrategy} from 'src/interfaces/IAssetInterestRateStrategy.sol';
 import {DataTypes} from 'src/libraries/types/DataTypes.sol';
 import {AssetLogic} from 'src/libraries/logic/AssetLogic.sol';
 import {WadRayMath} from 'src/libraries/math/WadRayMath.sol';
 import {SharesMath} from 'src/libraries/math/SharesMath.sol';
 import {PercentageMath} from 'src/libraries/math/PercentageMath.sol';
+import {MathUtils} from 'src/libraries/math/MathUtils.sol';
 
-// @dev Amounts are `asset` denominated by default unless specified otherwise with `share` suffix
-contract LiquidityHub is ILiquidityHub, AccessManaged {
+import {IHubBase, IHub} from 'src/interfaces/IHub.sol';
+import {IAssetInterestRateStrategy} from 'src/interfaces/IAssetInterestRateStrategy.sol';
+
+contract Hub is IHub, AccessManaged {
   using EnumerableSet for EnumerableSet.AddressSet;
   using SafeERC20 for IERC20;
   using WadRayMath for uint256;
   using SharesMath for uint256;
   using PercentageMath for uint256;
   using AssetLogic for DataTypes.Asset;
+  using MathUtils for uint256;
 
   uint8 public constant MAX_ALLOWED_ASSET_DECIMALS = 18;
 
@@ -39,7 +41,7 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     // Intentionally left blank
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function addAsset(
     address underlying,
     uint8 decimals,
@@ -54,14 +56,14 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
 
     uint256 assetId = _assetCount++;
     IAssetInterestRateStrategy(irStrategy).setInterestRateData(assetId, data);
-    uint256 baseBorrowRate = IAssetInterestRateStrategy(irStrategy).calculateInterestRate({
+    uint256 drawnRate = IAssetInterestRateStrategy(irStrategy).calculateInterestRate({
       assetId: assetId,
-      availableLiquidity: 0,
-      baseDebt: 0,
-      premiumDebt: 0
+      liquidity: 0,
+      drawn: 0,
+      premium: 0
     });
 
-    uint256 baseDebtIndex = WadRayMath.RAY;
+    uint256 drawnIndex = WadRayMath.RAY;
     uint256 lastUpdateTimestamp = block.timestamp;
     DataTypes.AssetConfig memory config = DataTypes.AssetConfig({
       feeReceiver: feeReceiver,
@@ -71,14 +73,14 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     _assets[assetId] = DataTypes.Asset({
       underlying: underlying,
       decimals: decimals,
-      suppliedShares: 0,
-      availableLiquidity: 0,
-      baseDrawnShares: 0,
-      premiumDrawnShares: 0,
+      addedShares: 0,
+      liquidity: 0,
+      drawnShares: 0,
+      premiumShares: 0,
       premiumOffset: 0,
       realizedPremium: 0,
-      baseDebtIndex: baseDebtIndex,
-      baseBorrowRate: baseBorrowRate,
+      drawnIndex: drawnIndex,
+      drawnRate: drawnRate,
       lastUpdateTimestamp: lastUpdateTimestamp,
       deficit: 0,
       config: config
@@ -86,12 +88,12 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
 
     emit AssetAdded(assetId, underlying, decimals);
     emit AssetConfigUpdated(assetId, config);
-    emit AssetUpdated(assetId, baseDebtIndex, baseBorrowRate, lastUpdateTimestamp);
+    emit AssetUpdated(assetId, drawnIndex, drawnRate, lastUpdateTimestamp);
 
     return assetId;
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function updateAssetConfig(
     uint256 assetId,
     DataTypes.AssetConfig calldata config
@@ -105,7 +107,7 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
 
     asset.config = config;
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
     emit AssetConfigUpdated(assetId, config);
   }
@@ -136,78 +138,73 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     emit SpokeConfigUpdated(assetId, spoke, config);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function setInterestRateData(uint256 assetId, bytes calldata data) external restricted {
     DataTypes.Asset storage asset = _assets[assetId];
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
     IAssetInterestRateStrategy(asset.config.irStrategy).setInterestRateData(assetId, data);
   }
 
-  // /////
-  // Spoke Actions
-  // /////
-
-  /// @inheritdoc ILiquidityHubBase
+  /// @inheritdoc IHubBase
   function add(uint256 assetId, uint256 amount, address from) external returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
-    _validateAdd(asset, spoke, amount, from);
+    _validateAdd(asset, spoke, assetId, amount, from);
 
     // todo: Mitigate inflation attack
-    uint256 suppliedShares = previewAddByAssets(assetId, amount);
-    require(suppliedShares != 0, InvalidSharesAmount());
-    asset.suppliedShares += suppliedShares;
-    spoke.suppliedShares += suppliedShares;
-    asset.availableLiquidity += amount;
+    uint256 shares = previewAddByAssets(assetId, amount);
+    require(shares != 0, InvalidSharesAmount());
+    asset.addedShares += shares;
+    spoke.addedShares += shares;
+    asset.liquidity += amount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
-    // TODO: fee-on-transfer
     IERC20(asset.underlying).safeTransferFrom(from, address(this), amount);
 
-    emit Add(assetId, msg.sender, suppliedShares, amount);
+    emit Add(assetId, msg.sender, shares, amount);
 
-    return suppliedShares;
+    return shares;
   }
 
-  /// @inheritdoc ILiquidityHubBase
+  /// @inheritdoc IHubBase
   function remove(uint256 assetId, uint256 amount, address to) external returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
-    _validateRemove(asset, spoke, amount, to);
+    _validateRemove(asset, spoke, assetId, amount, to);
 
-    uint256 withdrawnShares = previewRemoveByAssets(assetId, amount); // non zero since we round up
-    asset.suppliedShares -= withdrawnShares;
-    spoke.suppliedShares -= withdrawnShares;
-    asset.availableLiquidity -= amount;
+    uint256 shares = previewRemoveByAssets(assetId, amount); // non zero since we round up
+    asset.addedShares -= shares;
+    spoke.addedShares -= shares;
+    asset.liquidity -= amount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
     IERC20(asset.underlying).safeTransfer(to, amount);
 
-    emit Remove(assetId, msg.sender, withdrawnShares, amount);
+    emit Remove(assetId, msg.sender, shares, amount);
 
-    return withdrawnShares;
+    return shares;
   }
 
-  /// @inheritdoc ILiquidityHubBase
+  /// @inheritdoc IHubBase
   function draw(uint256 assetId, uint256 amount, address to) external returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
-    _validateDraw(asset, spoke, amount, to);
+    _validateDraw(asset, spoke, assetId, amount, to);
 
     uint256 drawnShares = previewDrawByAssets(assetId, amount); // non zero since we round up
-    asset.baseDrawnShares += drawnShares;
-    spoke.baseDrawnShares += drawnShares;
-    asset.availableLiquidity -= amount;
+    asset.drawnShares += drawnShares;
+    spoke.drawnShares += drawnShares;
+    asset.liquidity -= amount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
     IERC20(asset.underlying).safeTransfer(to, amount);
 
@@ -216,10 +213,10 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     return drawnShares;
   }
 
-  /// @inheritdoc ILiquidityHubBase
+  /// @inheritdoc IHubBase
   function restore(
     uint256 assetId,
-    uint256 baseAmount,
+    uint256 drawnAmount,
     uint256 premiumAmount,
     DataTypes.PremiumDelta calldata premiumDelta,
     address from
@@ -228,35 +225,28 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
-    _validateRestore(asset, spoke, baseAmount, premiumAmount, from);
+    _validateRestore(asset, spoke, assetId, drawnAmount, premiumAmount, from);
 
     _applyPremiumDelta(asset, spoke, premiumDelta, premiumAmount);
-    uint256 baseDrawnSharesRestored = previewRestoreByAssets(assetId, baseAmount);
-    asset.baseDrawnShares -= baseDrawnSharesRestored;
-    spoke.baseDrawnShares -= baseDrawnSharesRestored;
-    uint256 totalRestoredAmount = baseAmount + premiumAmount;
-    asset.availableLiquidity += totalRestoredAmount;
+    uint256 drawnShares = previewRestoreByAssets(assetId, drawnAmount);
+    asset.drawnShares -= drawnShares;
+    spoke.drawnShares -= drawnShares;
+    uint256 totalAmount = drawnAmount + premiumAmount;
+    asset.liquidity += totalAmount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
-    IERC20(asset.underlying).safeTransferFrom(from, address(this), totalRestoredAmount);
+    IERC20(asset.underlying).safeTransferFrom(from, address(this), totalAmount);
 
-    emit Restore(
-      assetId,
-      msg.sender,
-      baseDrawnSharesRestored,
-      premiumDelta,
-      baseAmount,
-      premiumAmount
-    );
+    emit Restore(assetId, msg.sender, drawnShares, premiumDelta, drawnAmount, premiumAmount);
 
-    return baseDrawnSharesRestored;
+    return drawnShares;
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function reportDeficit(
     uint256 assetId,
-    uint256 baseAmount,
+    uint256 drawnAmount,
     uint256 premiumAmount,
     DataTypes.PremiumDelta calldata premiumDelta
   ) external returns (uint256) {
@@ -265,29 +255,23 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
 
-    _validateReportDeficit(asset, spoke, baseAmount, premiumAmount);
+    _validateReportDeficit(asset, spoke, assetId, drawnAmount, premiumAmount);
 
     _applyPremiumDelta(asset, spoke, premiumDelta, premiumAmount);
-    uint256 baseDrawnSharesRestored = previewRestoreByAssets(assetId, baseAmount);
-    asset.baseDrawnShares -= baseDrawnSharesRestored;
-    spoke.baseDrawnShares -= baseDrawnSharesRestored;
-    uint256 totalDeficitAmount = baseAmount + premiumAmount;
+    uint256 drawnShares = previewRestoreByAssets(assetId, drawnAmount);
+    asset.drawnShares -= drawnShares;
+    spoke.drawnShares -= drawnShares;
+    uint256 totalDeficitAmount = drawnAmount + premiumAmount;
     asset.deficit += totalDeficitAmount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
-    emit DeficitReported(
-      assetId,
-      msg.sender,
-      baseDrawnSharesRestored,
-      premiumDelta,
-      totalDeficitAmount
-    );
+    emit DeficitReported(assetId, msg.sender, drawnShares, premiumDelta, totalDeficitAmount);
 
-    return baseDrawnSharesRestored;
+    return drawnShares;
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function eliminateDeficit(uint256 assetId, uint256 amount) external returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
@@ -295,39 +279,36 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
     _validateEliminateDeficit(asset, spoke, amount);
 
-    uint256 removedShares = previewRemoveByAssets(assetId, amount);
-    asset.suppliedShares -= removedShares;
-    spoke.suppliedShares -= removedShares;
+    uint256 shares = previewRemoveByAssets(assetId, amount);
+    asset.addedShares -= shares;
+    spoke.addedShares -= shares;
     asset.deficit -= amount;
 
-    asset.updateBorrowRate(assetId);
+    asset.updateDrawnRate(assetId);
 
-    emit EliminateDeficit(assetId, msg.sender, removedShares, amount);
+    emit EliminateDeficit(assetId, msg.sender, shares, amount);
 
-    return removedShares;
+    return shares;
   }
 
-  /// @inheritdoc ILiquidityHub
-  function refreshPremiumDebt(
-    uint256 assetId,
-    DataTypes.PremiumDelta calldata premiumDelta
-  ) external {
+  /// @inheritdoc IHub
+  function refreshPremium(uint256 assetId, DataTypes.PremiumDelta calldata premiumDelta) external {
     DataTypes.Asset storage asset = _assets[assetId];
     DataTypes.SpokeData storage spoke = _spokes[assetId][msg.sender];
 
     require(spoke.config.active, SpokeNotActive());
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
 
-    // no premium debt change allowed
+    // no premium change allowed
     _applyPremiumDelta(asset, spoke, premiumDelta, 0);
 
-    emit RefreshPremiumDebt(assetId, msg.sender, premiumDelta);
+    emit RefreshPremium(assetId, msg.sender, premiumDelta);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function payFee(uint256 assetId, uint256 feeShares) external {
+  /// @inheritdoc IHub
+  function payFee(uint256 assetId, uint256 shares) external {
     DataTypes.SpokeData storage sender = _spokes[assetId][msg.sender];
-    _validatePayFee(sender, feeShares);
+    _validatePayFee(sender, shares);
 
     address feeReceiver = _assets[assetId].config.feeReceiver;
     DataTypes.Asset storage asset = _assets[assetId];
@@ -335,17 +316,17 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
 
     asset.accrue(assetId, receiver);
 
-    _transferShares(sender, receiver, feeShares);
+    _transferShares(sender, receiver, shares);
 
-    emit TransferShares(assetId, feeShares, msg.sender, feeReceiver);
+    emit TransferShares(assetId, shares, msg.sender, feeReceiver);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function transferShares(uint256 assetId, uint256 shares, address toSpoke) external {
     DataTypes.SpokeData storage sender = _spokes[assetId][msg.sender];
     DataTypes.SpokeData storage receiver = _spokes[assetId][toSpoke];
     DataTypes.Asset storage asset = _assets[assetId];
-    _validateTransferShares(asset, sender, receiver, shares);
+    _validateTransferShares(asset, sender, receiver, assetId, shares);
 
     asset.accrue(assetId, _spokes[assetId][asset.config.feeReceiver]);
 
@@ -354,31 +335,32 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     emit TransferShares(assetId, shares, msg.sender, toSpoke);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function getAssetCount() external view override returns (uint256) {
     return _assetCount;
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function getAsset(uint256 assetId) external view returns (DataTypes.Asset memory) {
     return _assets[assetId];
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function getSpokeCount(uint256 assetId) external view returns (uint256) {
     return _assetToSpokes[assetId].length();
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function getSpokeAddress(uint256 assetId, uint256 index) external view returns (address) {
     return _assetToSpokes[assetId].at(index);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function isSpokeListed(uint256 assetId, address spoke) external view returns (bool) {
     return _assetToSpokes[assetId].contains(spoke);
   }
 
+  /// @inheritdoc IHub
   function getSpoke(
     uint256 assetId,
     address spoke
@@ -386,6 +368,7 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     return _spokes[assetId][spoke];
   }
 
+  /// @inheritdoc IHub
   function getSpokeConfig(
     uint256 assetId,
     address spoke
@@ -393,134 +376,136 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     return _spokes[assetId][spoke].config;
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewAddByAssets(uint256 assetId, uint256 assets) public view returns (uint256) {
-    return _assets[assetId].toSuppliedSharesDown(assets);
+    return _assets[assetId].toAddedSharesDown(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewAddByShares(uint256 assetId, uint256 shares) public view returns (uint256) {
-    return _assets[assetId].toSuppliedAssetsUp(shares);
+    return _assets[assetId].toAddedAssetsUp(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewRemoveByAssets(uint256 assetId, uint256 assets) public view returns (uint256) {
-    return _assets[assetId].toSuppliedSharesUp(assets);
+    return _assets[assetId].toAddedSharesUp(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewRemoveByShares(uint256 assetId, uint256 shares) public view returns (uint256) {
-    return _assets[assetId].toSuppliedAssetsDown(shares);
+    return _assets[assetId].toAddedAssetsDown(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewDrawByAssets(uint256 assetId, uint256 assets) public view returns (uint256) {
     return _assets[assetId].toDrawnSharesUp(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function previewDrawByShares(uint256 assetId, uint256 shares) public view returns (uint256) {
+  /// @inheritdoc IHub
+  function previewDrawByShares(uint256 assetId, uint256 shares) external view returns (uint256) {
     return _assets[assetId].toDrawnAssetsDown(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewRestoreByAssets(uint256 assetId, uint256 assets) public view returns (uint256) {
     return _assets[assetId].toDrawnSharesDown(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function previewRestoreByShares(uint256 assetId, uint256 shares) public view returns (uint256) {
     return _assets[assetId].toDrawnAssetsUp(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function convertToSuppliedAssets(uint256 assetId, uint256 shares) public view returns (uint256) {
-    return _assets[assetId].toSuppliedAssetsDown(shares);
+  /// @inheritdoc IHub
+  function convertToAddedAssets(uint256 assetId, uint256 shares) external view returns (uint256) {
+    return _assets[assetId].toAddedAssetsDown(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function convertToSuppliedShares(uint256 assetId, uint256 assets) public view returns (uint256) {
-    return _assets[assetId].toSuppliedSharesDown(assets);
+  /// @inheritdoc IHub
+  function convertToAddedShares(uint256 assetId, uint256 assets) external view returns (uint256) {
+    return _assets[assetId].toAddedSharesDown(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function convertToDrawnAssets(uint256 assetId, uint256 shares) public view returns (uint256) {
+  /// @inheritdoc IHub
+  function convertToDrawnAssets(uint256 assetId, uint256 shares) external view returns (uint256) {
     return _assets[assetId].toDrawnAssetsUp(shares);
   }
 
-  /// @inheritdoc ILiquidityHub
-  function convertToDrawnShares(uint256 assetId, uint256 assets) public view returns (uint256) {
+  /// @inheritdoc IHub
+  function convertToDrawnShares(uint256 assetId, uint256 assets) external view returns (uint256) {
     return _assets[assetId].toDrawnSharesDown(assets);
   }
 
-  /// @inheritdoc ILiquidityHub
+  /// @inheritdoc IHub
   function getAssetDrawnIndex(uint256 assetId) external view returns (uint256) {
     return _assets[assetId].getDrawnIndex();
   }
 
-  function getBaseInterestRate(uint256 assetId) external view returns (uint256) {
-    return _assets[assetId].baseBorrowRate;
-  }
-
-  function getAssetDebt(uint256 assetId) external view returns (uint256, uint256) {
+  function getAssetOwed(uint256 assetId) external view returns (uint256, uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
-    return (asset.baseDebt(), asset.premiumDebt());
+    return (asset.drawn(), asset.premium());
   }
 
-  function getAssetTotalDebt(uint256 assetId) external view returns (uint256) {
-    return _assets[assetId].totalDebt();
+  function getAssetTotalOwed(uint256 assetId) external view returns (uint256) {
+    return _assets[assetId].totalOwed();
   }
 
-  function getSpokeDebt(uint256 assetId, address spoke) external view returns (uint256, uint256) {
-    return _getSpokeDebt(_assets[assetId], _spokes[assetId][spoke]);
+  function getSpokeOwed(uint256 assetId, address spoke) external view returns (uint256, uint256) {
+    return _getSpokeOwed(_assets[assetId], _spokes[assetId][spoke], assetId);
   }
 
-  function getSpokeTotalDebt(uint256 assetId, address spoke) external view returns (uint256) {
-    (uint256 baseDebt, uint256 premiumDebt) = _getSpokeDebt(
+  function getSpokeTotalOwed(uint256 assetId, address spoke) external view returns (uint256) {
+    (uint256 drawn, uint256 premium) = _getSpokeOwed(
       _assets[assetId],
-      _spokes[assetId][spoke]
+      _spokes[assetId][spoke],
+      assetId
     );
-    return baseDebt + premiumDebt;
+    return drawn + premium;
   }
 
-  function getAssetSuppliedAmount(uint256 assetId) external view returns (uint256) {
+  function getAssetAddedAmount(uint256 assetId) external view returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
-    return asset.toSuppliedAssetsDown(asset.suppliedShares);
+    return previewRemoveByShares(assetId, asset.addedShares);
   }
 
-  function getAssetSuppliedShares(uint256 assetId) external view returns (uint256) {
-    return _assets[assetId].suppliedShares;
+  function getAssetDrawnRate(uint256 assetId) external view returns (uint256) {
+    return _assets[assetId].drawnRate;
   }
 
-  function getTotalSuppliedAssets(uint256 assetId) external view override returns (uint256) {
-    return _assets[assetId].totalSuppliedAssets();
+  function getAssetAddedShares(uint256 assetId) external view returns (uint256) {
+    return _assets[assetId].addedShares;
   }
 
-  function getTotalSuppliedShares(uint256 assetId) external view override returns (uint256) {
-    return _assets[assetId].totalSuppliedShares();
+  function getTotalAddedAssets(uint256 assetId) external view override returns (uint256) {
+    return _assets[assetId].totalAddedAssets();
   }
 
-  function getSpokeSuppliedAmount(uint256 assetId, address spoke) external view returns (uint256) {
+  function getTotalAddedShares(uint256 assetId) external view override returns (uint256) {
+    return _assets[assetId].totalAddedShares();
+  }
+
+  function getSpokeAddedAmount(uint256 assetId, address spoke) external view returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     if (spoke == asset.config.feeReceiver) {
       return
-        asset.toSuppliedAssetsDown(
-          _spokes[assetId][spoke].suppliedShares + asset.unrealizedFeeShares()
+        previewRemoveByShares(
+          assetId,
+          _spokes[assetId][spoke].addedShares + asset.unrealizedFeeShares()
         );
     }
-    return asset.toSuppliedAssetsDown(_spokes[assetId][spoke].suppliedShares);
+    return previewRemoveByShares(assetId, _spokes[assetId][spoke].addedShares);
   }
 
-  function getSpokeSuppliedShares(uint256 assetId, address spoke) external view returns (uint256) {
+  function getSpokeAddedShares(uint256 assetId, address spoke) external view returns (uint256) {
     DataTypes.Asset storage asset = _assets[assetId];
     if (spoke == asset.config.feeReceiver) {
-      return _spokes[assetId][spoke].suppliedShares + asset.unrealizedFeeShares();
+      return _spokes[assetId][spoke].addedShares + asset.unrealizedFeeShares();
     }
-    return _spokes[assetId][spoke].suppliedShares;
+    return _spokes[assetId][spoke].addedShares;
   }
 
-  function getAvailableLiquidity(uint256 assetId) external view returns (uint256) {
-    return _assets[assetId].availableLiquidity;
+  function getLiquidity(uint256 assetId) external view returns (uint256) {
+    return _assets[assetId].liquidity;
   }
 
   function getDeficit(uint256 assetId) external view returns (uint256) {
@@ -531,12 +516,8 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     return _assets[assetId].config;
   }
 
-  //
-  // Internal
-  //
-
   /**
-   * @dev Applies premium deltas on asset and spoke debt, and validates that total premium debt
+   * @dev Applies premium deltas on asset and spoke owed, and validates that total premium
    * cannot decrease by more than `premiumAmount`.
    */
   function _applyPremiumDelta(
@@ -545,19 +526,19 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     DataTypes.PremiumDelta calldata premium,
     uint256 premiumAmount
   ) internal {
-    uint256 premiumDebtBefore = asset.premiumDebt();
+    uint256 premiumBefore = asset.premium();
 
-    asset.premiumDrawnShares = _add(asset.premiumDrawnShares, premium.drawnSharesDelta);
-    asset.premiumOffset = _add(asset.premiumOffset, premium.offsetDelta);
-    asset.realizedPremium = _add(asset.realizedPremium, premium.realizedDelta);
+    asset.premiumShares = asset.premiumShares.add(premium.sharesDelta);
+    asset.premiumOffset = asset.premiumOffset.add(premium.offsetDelta);
+    asset.realizedPremium = asset.realizedPremium.add(premium.realizedDelta);
 
-    spoke.premiumDrawnShares = _add(spoke.premiumDrawnShares, premium.drawnSharesDelta);
-    spoke.premiumOffset = _add(spoke.premiumOffset, premium.offsetDelta);
-    spoke.realizedPremium = _add(spoke.realizedPremium, premium.realizedDelta);
+    spoke.premiumShares = spoke.premiumShares.add(premium.sharesDelta);
+    spoke.premiumOffset = spoke.premiumOffset.add(premium.offsetDelta);
+    spoke.realizedPremium = spoke.realizedPremium.add(premium.realizedDelta);
 
-    // can increase due to precision loss on premium debt (base unchanged)
+    // can increase due to precision loss on premium (drawn unchanged)
     // todo mathematically find premium diff ceiling and replace the `2`
-    require(asset.premiumDebt() + premiumAmount - premiumDebtBefore <= 2, InvalidDebtChange());
+    require(asset.premium() + premiumAmount - premiumBefore <= 2, InvalidPremiumChange());
   }
 
   function _transferShares(
@@ -565,47 +546,63 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     DataTypes.SpokeData storage receiver,
     uint256 shares
   ) internal {
-    uint256 suppliedShares = sender.suppliedShares;
-    require(shares <= suppliedShares, SuppliedSharesExceeded(suppliedShares));
+    uint256 addedShares = sender.addedShares;
+    require(shares <= addedShares, AddedSharesExceeded(addedShares));
 
-    sender.suppliedShares = suppliedShares - shares;
-    receiver.suppliedShares += shares;
+    sender.addedShares = addedShares - shares;
+    receiver.addedShares += shares;
+  }
+
+  function _getSpokeOwed(
+    DataTypes.Asset storage asset,
+    DataTypes.SpokeData storage spoke,
+    uint256 assetId
+  ) internal view returns (uint256, uint256) {
+    uint256 accruedPremium = previewRestoreByShares(assetId, spoke.premiumShares) -
+      spoke.premiumOffset;
+    return (
+      previewRestoreByShares(assetId, spoke.drawnShares),
+      spoke.realizedPremium + accruedPremium
+    );
   }
 
   function _validateAdd(
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage spoke,
+    uint256 assetId,
     uint256 amount,
     address from
   ) internal view {
     require(from != address(this), InvalidFromAddress());
     require(amount > 0, InvalidAddAmount());
     require(spoke.config.active, SpokeNotActive());
-    uint256 supplyCap = spoke.config.supplyCap;
+    uint256 addCap = spoke.config.addCap;
     require(
-      supplyCap == type(uint256).max ||
-        supplyCap >= asset.toSuppliedAssetsUp(spoke.suppliedShares) + amount,
-      SupplyCapExceeded(supplyCap)
+      addCap == type(uint256).max ||
+        addCap >= previewAddByShares(assetId, spoke.addedShares) + amount,
+      AddCapExceeded(addCap)
     );
   }
 
   function _validateRemove(
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage spoke,
+    uint256 assetId,
     uint256 amount,
     address to
   ) internal view {
     require(to != address(this), InvalidToAddress());
     require(amount > 0, InvalidRemoveAmount());
     require(spoke.config.active, SpokeNotActive());
-    uint256 withdrawable = asset.toSuppliedAssetsDown(spoke.suppliedShares);
-    require(amount <= withdrawable, SuppliedAmountExceeded(withdrawable));
-    require(amount <= asset.availableLiquidity, NotAvailableLiquidity(asset.availableLiquidity));
+    uint256 withdrawable = previewRemoveByShares(assetId, spoke.addedShares);
+    require(amount <= withdrawable, AddedAmountExceeded(withdrawable));
+    require(amount <= asset.liquidity, NotLiquidity(asset.liquidity));
   }
 
   function _validateDraw(
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage spoke,
+    uint256 assetId,
     uint256 amount,
     address to
   ) internal view {
@@ -613,49 +610,42 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     require(amount > 0, InvalidDrawAmount());
     require(spoke.config.active, SpokeNotActive());
     uint256 drawCap = spoke.config.drawCap;
-    (uint256 drawn, uint256 premium) = _getSpokeDebt(asset, spoke);
+    (uint256 drawn, uint256 premium) = _getSpokeOwed(asset, spoke, assetId);
     require(
       drawCap == type(uint256).max || drawCap >= drawn + premium + amount,
       DrawCapExceeded(drawCap)
     );
-    require(amount <= asset.availableLiquidity, NotAvailableLiquidity(asset.availableLiquidity));
+    require(amount <= asset.liquidity, NotLiquidity(asset.liquidity));
   }
 
   function _validateRestore(
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage spoke,
-    uint256 baseAmountRestored,
-    uint256 premiumAmountRestored,
+    uint256 assetId,
+    uint256 drawnAmount,
+    uint256 premiumAmount,
     address from
   ) internal view {
     require(from != address(this), InvalidFromAddress());
-    require(baseAmountRestored + premiumAmountRestored > 0, InvalidRestoreAmount());
+    require(drawnAmount + premiumAmount > 0, InvalidRestoreAmount());
     require(spoke.config.active, SpokeNotActive());
-    (uint256 baseDebt, uint256 premiumDebt) = _getSpokeDebt(asset, spoke);
-    require(baseAmountRestored <= baseDebt, SurplusAmountRestored(baseDebt));
-    require(premiumAmountRestored <= premiumDebt, SurplusAmountRestored(premiumDebt));
-  }
-
-  function _getSpokeDebt(
-    DataTypes.Asset storage asset,
-    DataTypes.SpokeData storage spoke
-  ) internal view returns (uint256, uint256) {
-    // sanity: utilize solc underflow check
-    uint256 accruedPremium = asset.toDrawnAssetsUp(spoke.premiumDrawnShares) - spoke.premiumOffset;
-    return (asset.toDrawnAssetsUp(spoke.baseDrawnShares), spoke.realizedPremium + accruedPremium);
+    (uint256 drawn, uint256 premium) = _getSpokeOwed(asset, spoke, assetId);
+    require(drawnAmount <= drawn, SurplusAmountRestored(drawn));
+    require(premiumAmount <= premium, SurplusAmountRestored(premium));
   }
 
   function _validateReportDeficit(
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage spoke,
-    uint256 baseAmount,
+    uint256 assetId,
+    uint256 drawnAmount,
     uint256 premiumAmount
   ) internal view {
     require(spoke.config.active, SpokeNotActive());
-    require(baseAmount + premiumAmount != 0, InvalidDeficitAmount());
-    (uint256 baseDebt, uint256 premiumDebt) = _getSpokeDebt(asset, spoke);
-    require(baseAmount <= baseDebt, SurplusDeficitReported(baseDebt));
-    require(premiumAmount <= premiumDebt, SurplusDeficitReported(premiumDebt));
+    require(drawnAmount + premiumAmount != 0, InvalidDeficitAmount());
+    (uint256 drawn, uint256 premium) = _getSpokeOwed(asset, spoke, assetId);
+    require(drawnAmount <= drawn, SurplusDeficitReported(drawn));
+    require(premiumAmount <= premium, SurplusDeficitReported(premium));
   }
 
   function _validateEliminateDeficit(
@@ -679,19 +669,14 @@ contract LiquidityHub is ILiquidityHub, AccessManaged {
     DataTypes.Asset storage asset,
     DataTypes.SpokeData storage sender,
     DataTypes.SpokeData storage receiver,
+    uint256 assetId,
     uint256 shares
   ) internal view {
     require(sender.config.active && receiver.config.active, SpokeNotActive());
     require(shares > 0, InvalidSharesAmount());
     require(
-      asset.toSuppliedAssetsDown(receiver.suppliedShares + shares) <= receiver.config.supplyCap,
-      SupplyCapExceeded(receiver.config.supplyCap)
+      previewRemoveByShares(assetId, receiver.addedShares + shares) <= receiver.config.addCap,
+      AddCapExceeded(receiver.config.addCap)
     );
-  }
-
-  // handles underflow
-  function _add(uint256 a, int256 b) internal pure returns (uint256) {
-    if (b >= 0) return a + uint256(b);
-    return a - uint256(-b);
   }
 }

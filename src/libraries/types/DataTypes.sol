@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.10;
 
-import {ILiquidityHub} from 'src/interfaces/ILiquidityHub.sol';
+import {IHub} from 'src/interfaces/IHub.sol';
 
 library DataTypes {
-  // Liquidity Hub types
+  // Hub types
   // todo pack
   struct SpokeData {
-    uint256 suppliedShares;
-    uint256 baseDrawnShares;
-    uint256 premiumDrawnShares;
+    uint256 addedShares;
+    uint256 drawnShares;
+    uint256 premiumShares;
     uint256 premiumOffset; // todo make signed
     uint256 realizedPremium;
     DataTypes.SpokeConfig config;
@@ -18,14 +18,14 @@ library DataTypes {
   struct Asset {
     address underlying;
     uint8 decimals;
-    uint256 suppliedShares;
-    uint256 availableLiquidity;
-    uint256 baseDrawnShares;
-    uint256 premiumDrawnShares;
+    uint256 addedShares;
+    uint256 liquidity;
+    uint256 drawnShares;
+    uint256 premiumShares;
     uint256 premiumOffset; // todo make signed
     uint256 realizedPremium;
-    uint256 baseDebtIndex;
-    uint256 baseBorrowRate;
+    uint256 drawnIndex;
+    uint256 drawnRate;
     uint256 lastUpdateTimestamp;
     uint256 deficit;
     DataTypes.AssetConfig config;
@@ -33,7 +33,7 @@ library DataTypes {
 
   struct SpokeConfig {
     bool active;
-    uint256 supplyCap;
+    uint256 addCap;
     uint256 drawCap;
   }
 
@@ -51,7 +51,7 @@ library DataTypes {
     uint16 dynamicConfigKey; // key of the last reserve config
     uint8 decimals;
     address underlying;
-    ILiquidityHub hub;
+    IHub hub;
   }
 
   struct ReserveConfig {
@@ -69,8 +69,8 @@ library DataTypes {
 
   struct UserPosition {
     uint256 suppliedShares;
-    uint256 baseDrawnShares;
-    uint256 premiumDrawnShares;
+    uint256 drawnShares;
+    uint256 premiumShares;
     uint256 premiumOffset;
     uint256 realizedPremium;
     uint16 configKey; // key of the last user config
@@ -90,7 +90,7 @@ library DataTypes {
     uint256 reserveCount;
     uint256 reserveId;
     uint256 assetId;
-    ILiquidityHub hub;
+    IHub hub;
     DataTypes.PremiumDelta premiumDelta;
   }
 
@@ -119,7 +119,7 @@ library DataTypes {
   }
 
   struct PremiumDelta {
-    int256 drawnSharesDelta;
+    int256 sharesDelta;
     int256 offsetDelta;
     int256 realizedDelta;
   }
@@ -138,7 +138,7 @@ library DataTypes {
     uint256 totalDebt;
     uint256 healthFactor;
     uint256 liquidationBonus;
-    uint256 baseDebtToLiquidate;
+    uint256 drawnDebtToLiquidate;
     uint256 premiumDebtToLiquidate;
     uint256 closeFactor;
     uint256 collateralFactor;
@@ -166,13 +166,13 @@ library DataTypes {
     uint256 collateralAssetId;
     uint256 debtReserveId;
     uint256 collateralReserveId;
-    uint256 baseDebt;
+    uint256 drawnDebt;
     uint256 premiumDebt;
     uint256 accruedPremium;
     uint256 collateralToLiquidate;
     uint256 liquidationFeeAmount;
     uint256 liquidationFeeShares;
-    uint256 baseDebtToLiquidate;
+    uint256 drawnDebtToLiquidate;
     uint256 premiumDebtToLiquidate;
     uint256 restoredShares;
     uint256 withdrawnShares;
@@ -184,19 +184,19 @@ library DataTypes {
     bool hasDeficit;
     address collateralUnderlying;
     address debtUnderlying;
-    ILiquidityHub collateralReserveHub;
-    ILiquidityHub debtReserveHub;
+    IHub collateralReserveHub;
+    IHub debtReserveHub;
   }
 
   struct ExecuteRepayLocalVars {
-    ILiquidityHub hub;
+    IHub hub;
     uint256 assetId;
-    uint256 baseDebt;
+    uint256 drawnDebt;
     uint256 premiumDebt;
     uint256 accruedPremium;
-    uint256 baseDebtRestored;
+    uint256 drawnDebtRestored;
     uint256 premiumDebtRestored;
-    uint256 userPremiumDrawnShares;
+    uint256 userPremiumShares;
     uint256 userPremiumOffset;
     uint256 newUserRiskPremium;
     uint256 restoredShares;

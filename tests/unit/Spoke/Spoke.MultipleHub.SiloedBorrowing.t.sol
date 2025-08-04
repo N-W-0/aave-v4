@@ -7,7 +7,7 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
   struct SiloedLocalVars {
     uint256 assetAId;
     uint256 assetBId;
-    uint256 assetASupplyCap;
+    uint256 assetAAddCap;
     uint256 assetBDrawCap;
     uint256 reserveAId;
     uint256 reserveBId;
@@ -31,7 +31,7 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
   function setUpSiloedBorrowing() internal {
     vm.startPrank(ADMIN);
     siloedVars.assetBDrawCap = 100_000e18;
-    siloedVars.assetASupplyCap = 500_000e18;
+    siloedVars.assetAAddCap = 500_000e18;
 
     // Add asset B to the new hub
     newHub.addAsset(
@@ -61,26 +61,22 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
     newHub.addSpoke(
       siloedVars.assetBId,
       address(newSpoke),
-      DataTypes.SpokeConfig({
-        active: true,
-        supplyCap: UINT256_MAX,
-        drawCap: siloedVars.assetBDrawCap
-      })
+      DataTypes.SpokeConfig({active: true, addCap: UINT256_MAX, drawCap: siloedVars.assetBDrawCap})
     );
 
     // Add asset A to the canonical hub
-    hub.addAsset(
+    hub1.addAsset(
       address(assetA),
       assetA.decimals(),
       address(treasurySpoke),
       address(irStrategy), // Use the canonical hub's interest rate strategy
       encodedIrData
     );
-    siloedVars.assetAId = hub.getAssetCount() - 1;
+    siloedVars.assetAId = hub1.getAssetCount() - 1;
 
     // Add A reserve to spoke 1
     siloedVars.reserveAId = spoke1.addReserve(
-      address(hub),
+      address(hub1),
       siloedVars.assetAId,
       _deployMockPriceFeed(spoke1, 50_000e8),
       DataTypes.ReserveConfig({
@@ -93,19 +89,15 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
     );
 
     // Link canonical hub and spoke 1 for asset A
-    hub.addSpoke(
+    hub1.addSpoke(
       siloedVars.assetAId,
       address(spoke1),
-      DataTypes.SpokeConfig({
-        active: true,
-        supplyCap: type(uint256).max,
-        drawCap: type(uint256).max
-      })
+      DataTypes.SpokeConfig({active: true, addCap: type(uint256).max, drawCap: type(uint256).max})
     );
 
     // Add reserve A from canonical hub to the new spoke
     siloedVars.reserveAIdNewSpoke = newSpoke.addReserve(
-      address(hub),
+      address(hub1),
       siloedVars.assetAId,
       _deployMockPriceFeed(newSpoke, 2000e8),
       DataTypes.ReserveConfig({
@@ -118,16 +110,16 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
     );
 
     // Link canonical hub and new spoke for asset A, 500k supply cap, 0 borrow cap
-    hub.addSpoke(
+    hub1.addSpoke(
       siloedVars.assetAId,
       address(newSpoke),
-      DataTypes.SpokeConfig({active: true, supplyCap: siloedVars.assetASupplyCap, drawCap: 0})
+      DataTypes.SpokeConfig({active: true, addCap: siloedVars.assetAAddCap, drawCap: 0})
     );
     vm.stopPrank();
 
     // Approvals
     vm.prank(bob);
-    assetA.approve(address(hub), type(uint256).max);
+    assetA.approve(address(hub1), type(uint256).max);
 
     vm.prank(alice);
     assetB.approve(address(newHub), type(uint256).max);
@@ -139,7 +131,7 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
 
   /* @dev Test showcasing a possible configuration for siloed mode
    * A new hub and spoke are deployed with Assets A and B, where B is the only borrowable asset.
-   * Users can use usdx as collateral on the new spoke, which supplies to the canonical hub.
+   * Users can use usdx as collateral on the new spoke, which supplies to the canonical hub1.
    * Users may not borrow usdx from the new spoke, but can use it as collateral to borrow the
    * only borrowable asset: Asset B.
    */
@@ -149,12 +141,12 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
       newSpoke,
       siloedVars.reserveAIdNewSpoke,
       bob,
-      siloedVars.assetASupplyCap,
+      siloedVars.assetAAddCap,
       bob
     );
     assertEq(
       newSpoke.getUserSuppliedAmount(siloedVars.reserveAIdNewSpoke, bob),
-      siloedVars.assetASupplyCap,
+      siloedVars.assetAAddCap,
       'bob supplied amount of asset A on new spoke'
     );
     assertTrue(
@@ -162,19 +154,17 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
       'bob using asset A as collateral on new spoke'
     );
     assertEq(
-      hub.getAssetSuppliedAmount(siloedVars.assetAId),
-      siloedVars.assetASupplyCap,
+      hub1.getAssetAddedAmount(siloedVars.assetAId),
+      siloedVars.assetAAddCap,
       'total supplied amount of asset A on canonical hub'
     );
 
     // Bob cannot supply past his currently supplied amount due to supply cap
-    vm.expectRevert(
-      abi.encodeWithSelector(ILiquidityHub.SupplyCapExceeded.selector, siloedVars.assetASupplyCap)
-    );
+    vm.expectRevert(abi.encodeWithSelector(IHub.AddCapExceeded.selector, siloedVars.assetAAddCap));
     Utils.supply(newSpoke, siloedVars.reserveAIdNewSpoke, bob, 1e18, bob);
 
     // Bob cannot borrow asset A from the new spoke, canonical hub, because draw cap is 0
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.DrawCapExceeded.selector, 0));
+    vm.expectRevert(abi.encodeWithSelector(IHub.DrawCapExceeded.selector, 0));
     Utils.borrow(newSpoke, siloedVars.reserveAIdNewSpoke, bob, 1e18, bob);
 
     // Let Alice supply some asset B to the new spoke
@@ -185,7 +175,7 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
 
     // Check Bob's total debt of asset B on the new spoke
     assertEq(newSpoke.getUserTotalDebt(siloedVars.reserveBId, bob), siloedVars.assetBDrawCap);
-    assertEq(newHub.getAssetTotalDebt(siloedVars.assetBId), siloedVars.assetBDrawCap);
+    assertEq(newHub.getAssetTotalOwed(siloedVars.assetBId), siloedVars.assetBDrawCap);
     assertEq(
       newSpoke.getReserve(siloedVars.reserveBId).underlying,
       address(assetB),
@@ -194,7 +184,7 @@ contract SpokeMultipleHubSiloedBorrowingTest is SpokeMultipleHubBase {
 
     // Bob cannot borrow additional asset B from the new spoke, new hub, because of draw cap
     vm.expectRevert(
-      abi.encodeWithSelector(ILiquidityHub.DrawCapExceeded.selector, siloedVars.assetBDrawCap)
+      abi.encodeWithSelector(IHub.DrawCapExceeded.selector, siloedVars.assetBDrawCap)
     );
     Utils.borrow(newSpoke, siloedVars.reserveBId, bob, 1e18, bob);
   }

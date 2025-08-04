@@ -8,42 +8,42 @@ contract SpokeAccessTest is SpokeBase {
   function testAccess_hub_functions_callable_by_spokes() public {
     // Users are not allowed to directly call the hub functions
     vm.startPrank(bob);
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.add(daiAssetId, 1000e18, bob);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.add(daiAssetId, 1000e18, bob);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.remove(daiAssetId, 1000e18, bob);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.remove(daiAssetId, 1000e18, bob);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.draw(daiAssetId, 1000e18, bob);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.draw(daiAssetId, 1000e18, bob);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.restore(daiAssetId, 1000e18, 0, DataTypes.PremiumDelta(0, 0, 0), bob);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.restore(daiAssetId, 1000e18, 0, DataTypes.PremiumDelta(0, 0, 0), bob);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.refreshPremiumDebt(daiAssetId, DataTypes.PremiumDelta(0, 0, 0));
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.refreshPremium(daiAssetId, DataTypes.PremiumDelta(0, 0, 0));
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.payFee(daiAssetId, 1000e18);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.payFee(daiAssetId, 1000e18);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.SpokeNotActive.selector));
-    hub.transferShares(daiAssetId, 1000e18, bob);
+    vm.expectRevert(abi.encodeWithSelector(IHub.SpokeNotActive.selector));
+    hub1.transferShares(daiAssetId, 1000e18, bob);
 
     // A spoke is allowed to call the hub functions
     deal(address(tokenList.dai), address(spoke1), 1000e18);
     vm.startPrank(address(spoke1));
-    tokenList.dai.approve(address(hub), MAX_SUPPLY_AMOUNT);
+    tokenList.dai.approve(address(hub1), MAX_SUPPLY_AMOUNT);
     deal(address(tokenList.dai), address(spoke1), 1000e18);
-    hub.add(daiAssetId, 1000e18, address(spoke1));
-    hub.draw(daiAssetId, 500e18, address(spoke1));
-    hub.restore(daiAssetId, 500e18, 0, DataTypes.PremiumDelta(0, 0, 0), address(spoke1));
-    hub.remove(daiAssetId, 1000e18, address(spoke1));
-    hub.refreshPremiumDebt(daiAssetId, DataTypes.PremiumDelta(0, 0, 0));
-    hub.add(daiAssetId, 1000e18, address(spoke1));
-    hub.payFee(daiAssetId, 1e18);
-    hub.transferShares(
+    hub1.add(daiAssetId, 1000e18, address(spoke1));
+    hub1.draw(daiAssetId, 500e18, address(spoke1));
+    hub1.restore(daiAssetId, 500e18, 0, DataTypes.PremiumDelta(0, 0, 0), address(spoke1));
+    hub1.remove(daiAssetId, 1000e18, address(spoke1));
+    hub1.refreshPremium(daiAssetId, DataTypes.PremiumDelta(0, 0, 0));
+    hub1.add(daiAssetId, 1000e18, address(spoke1));
+    hub1.payFee(daiAssetId, 1e18);
+    hub1.transferShares(
       daiAssetId,
-      hub.getSpokeSuppliedShares(daiAssetId, address(spoke1)),
+      hub1.getSpokeAddedShares(daiAssetId, address(spoke1)),
       address(spoke2)
     );
     vm.stopPrank();
@@ -79,7 +79,7 @@ contract SpokeAccessTest is SpokeBase {
       abi.encodeWithSelector(IAccessManaged.AccessManagedUnauthorized.selector, address(this))
     );
     spoke1.addReserve(
-      address(hub),
+      address(hub1),
       4,
       reserveSource,
       DataTypes.ReserveConfig({paused: false, frozen: false, borrowable: true, collateralRisk: 0}),
@@ -93,7 +93,7 @@ contract SpokeAccessTest is SpokeBase {
     // Spoke admin can call addReserve
     vm.prank(SPOKE_ADMIN);
     spoke1.addReserve(
-      address(hub),
+      address(hub1),
       4,
       reserveSource,
       DataTypes.ReserveConfig({paused: false, frozen: false, borrowable: true, collateralRisk: 0}),
@@ -192,7 +192,7 @@ contract SpokeAccessTest is SpokeBase {
     );
     vm.prank(SPOKE_ADMIN);
     spoke1.addReserve(
-      address(hub),
+      address(hub1),
       5,
       reserveSource,
       DataTypes.ReserveConfig({paused: false, frozen: false, borrowable: true, collateralRisk: 0}),
@@ -211,7 +211,7 @@ contract SpokeAccessTest is SpokeBase {
     // Spoke admin can now call add reserve on the spoke after authority change
     vm.prank(SPOKE_ADMIN);
     spoke1.addReserve(
-      address(hub),
+      address(hub1),
       5,
       reserveSource,
       DataTypes.ReserveConfig({paused: false, frozen: false, borrowable: true, collateralRisk: 0}),

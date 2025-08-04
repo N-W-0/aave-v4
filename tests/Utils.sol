@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Vm} from 'forge-std/Vm.sol';
 import {IERC20} from 'src/dependencies/openzeppelin/IERC20.sol';
-import {ILiquidityHubBase, ILiquidityHub} from 'src/interfaces/ILiquidityHub.sol';
+import {IHub} from 'src/interfaces/IHub.sol';
 import {ISpokeBase, ISpoke} from 'src/interfaces/ISpoke.sol';
 import {IERC20} from 'src/dependencies/openzeppelin/IERC20.sol';
 import {DataTypes} from 'src/libraries/types/DataTypes.sol';
@@ -13,7 +13,7 @@ library Utils {
 
   // hub
   function add(
-    ILiquidityHub hub,
+    IHub hub,
     uint256 assetId,
     address caller,
     uint256 amount,
@@ -25,7 +25,7 @@ library Utils {
   }
 
   function draw(
-    ILiquidityHubBase hub,
+    IHub hub,
     uint256 assetId,
     address caller,
     address to,
@@ -36,7 +36,7 @@ library Utils {
   }
 
   function remove(
-    ILiquidityHubBase hub,
+    IHub hub,
     uint256 assetId,
     address caller,
     uint256 amount,
@@ -47,19 +47,19 @@ library Utils {
   }
 
   function restoreBase(
-    ILiquidityHub hub,
+    IHub hub,
     uint256 assetId,
     address caller,
-    uint256 baseAmount,
-    address repayer
+    uint256 drawnAmount,
+    address restorer
   ) internal returns (uint256) {
-    approve(hub, assetId, repayer, baseAmount);
+    approve(hub, assetId, restorer, drawnAmount);
     vm.prank(caller);
-    return hub.restore(assetId, baseAmount, 0, DataTypes.PremiumDelta(0, 0, 0), repayer);
+    return hub.restore(assetId, drawnAmount, 0, DataTypes.PremiumDelta(0, 0, 0), restorer);
   }
 
   function addSpoke(
-    ILiquidityHub hub,
+    IHub hub,
     address hubAdmin,
     uint256 assetId,
     address spoke,
@@ -70,7 +70,7 @@ library Utils {
   }
 
   function updateSpokeConfig(
-    ILiquidityHub hub,
+    IHub hub,
     address hubAdmin,
     uint256 assetId,
     address spoke,
@@ -81,7 +81,7 @@ library Utils {
   }
 
   function addAsset(
-    ILiquidityHub hub,
+    IHub hub,
     address hubAdmin,
     address underlying,
     uint8 decimals,
@@ -94,7 +94,7 @@ library Utils {
   }
 
   function updateAssetConfig(
-    ILiquidityHub hub,
+    IHub hub,
     address hubAdmin,
     uint256 assetId,
     DataTypes.AssetConfig memory config
@@ -179,7 +179,7 @@ library Utils {
     );
   }
 
-  function approve(ILiquidityHub hub, uint256 assetId, address owner, uint256 amount) internal {
+  function approve(IHub hub, uint256 assetId, address owner, uint256 amount) internal {
     _approve(IERC20(hub.getAsset(assetId).underlying), owner, address(hub), amount);
   }
 

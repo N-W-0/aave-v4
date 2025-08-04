@@ -61,7 +61,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     skip(elapsed);
 
     // Ensure interest has accrued
-    vm.assume(hub.getAssetSuppliedAmount(daiAssetId) > supplyAmount);
+    vm.assume(hub1.getAssetAddedAmount(daiAssetId) > supplyAmount);
 
     // Give Bob enough dai to repay
     uint256 repayAmount = spoke1.getReserveTotalDebt(_daiReserveId(spoke1));
@@ -75,8 +75,8 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
       onBehalfOf: bob
     });
 
-    uint256 treasuryFees = hub.getSpokeSuppliedAmount(daiAssetId, address(treasurySpoke));
-    uint256 interestAccrued = hub.getAssetSuppliedAmount(daiAssetId) - treasuryFees - supplyAmount;
+    uint256 treasuryFees = hub1.getSpokeAddedAmount(daiAssetId, address(treasurySpoke));
+    uint256 interestAccrued = hub1.getAssetAddedAmount(daiAssetId) - treasuryFees - supplyAmount;
 
     uint256 totalSupplied = interestAccrued + supplyAmount;
     assertApproxEqAbs(
@@ -87,14 +87,14 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     );
 
     // Fetch supply exchange rate before partial withdraw
-    uint256 supplyExRateBefore = getSupplyExRate(daiAssetId);
+    uint256 addExRateBefore = getAddExRate(daiAssetId);
 
     // Withdraw partial supplied assets
     Utils.withdraw(spoke1, _daiReserveId(spoke1), bob, partialWithdrawAmount, bob);
 
-    treasuryFees = hub.getSpokeSuppliedAmount(daiAssetId, address(treasurySpoke));
+    treasuryFees = hub1.getSpokeAddedAmount(daiAssetId, address(treasurySpoke));
     interestAccrued =
-      hub.getAssetSuppliedAmount(daiAssetId) -
+      hub1.getAssetAddedAmount(daiAssetId) -
       treasuryFees -
       (supplyAmount - partialWithdrawAmount);
 
@@ -108,14 +108,14 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
 
     // Check supply rate monotonically increasing after partial withdraw
     _checkSupplyRateIncreasing(
-      supplyExRateBefore,
-      getSupplyExRate(daiAssetId),
+      addExRateBefore,
+      getAddExRate(daiAssetId),
       false,
       'after partial withdraw'
     );
 
     // Fetch supply exchange rate before withdraw
-    supplyExRateBefore = getSupplyExRate(daiAssetId);
+    addExRateBefore = getAddExRate(daiAssetId);
 
     // Withdraw all supplied assets
     Utils.withdraw(spoke1, _daiReserveId(spoke1), bob, type(uint256).max, bob);
@@ -126,12 +126,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     _checkSuppliedAmounts(daiAssetId, _daiReserveId(spoke1), spoke1, bob, 0, 'after withdraw');
 
     // Check supply rate monotonically increasing after withdraw
-    _checkSupplyRateIncreasing(
-      supplyExRateBefore,
-      getSupplyExRate(daiAssetId),
-      true,
-      'after withdraw'
-    );
+    _checkSupplyRateIncreasing(addExRateBefore, getAddExRate(daiAssetId), true, 'after withdraw');
   }
 
   // multiple users, same asset
@@ -207,7 +202,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     aliceData[state.stage] = loadUserInfo(spoke1, params.reserveId, alice);
     bobData[state.stage] = loadUserInfo(spoke1, params.reserveId, bob);
     tokenData[state.stage] = getTokenBalances(state.underlying, address(spoke1));
-    uint256 supplyExRate = getSupplyExRate(state.assetId);
+    uint256 addExRate = getAddExRate(state.assetId);
 
     // make sure alice has a share to withdraw
     vm.assume(
@@ -224,8 +219,8 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     });
 
     _checkSupplyRateIncreasing(
-      supplyExRate,
-      getSupplyExRate(state.assetId),
+      addExRate,
+      getAddExRate(state.assetId),
       false,
       'after alice withdraw'
     );
@@ -238,7 +233,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     aliceData[state.stage] = loadUserInfo(spoke1, params.reserveId, alice);
     bobData[state.stage] = loadUserInfo(spoke1, params.reserveId, bob);
     tokenData[state.stage] = getTokenBalances(state.underlying, address(spoke1));
-    supplyExRate = getSupplyExRate(state.assetId);
+    addExRate = getAddExRate(state.assetId);
 
     // make sure bob has a share to withdraw
     vm.assume(
@@ -254,12 +249,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
       onBehalfOf: bob
     });
 
-    _checkSupplyRateIncreasing(
-      supplyExRate,
-      getSupplyExRate(state.assetId),
-      true,
-      'after bob withdraw'
-    );
+    _checkSupplyRateIncreasing(addExRate, getAddExRate(state.assetId), true, 'after bob withdraw');
 
     // treasury spoke withdraw fees
     withdrawLiquidityFees(state.assetId, type(uint256).max);
@@ -271,20 +261,22 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     tokenData[state.stage] = getTokenBalances(state.underlying, address(spoke1));
 
     // reserve
-    (uint256 reserveBaseDebt, uint256 reservePremiumDebt) = spoke1.getReserveDebt(params.reserveId);
-    assertEq(reserveBaseDebt, 0, 'reserveData base debt');
+    (uint256 reserveDrawnDebt, uint256 reservePremiumDebt) = spoke1.getReserveDebt(
+      params.reserveId
+    );
+    assertEq(reserveDrawnDebt, 0, 'reserveData drawn debt');
     assertEq(reservePremiumDebt, 0, 'reserveData premium debt');
-    assertEq(reserveData[state.stage].data.suppliedShares, 0, 'reserveData supplied shares');
+    assertEq(reserveData[state.stage].data.addedShares, 0, 'reserveData added shares');
 
     // alice
-    (uint256 userBaseDebt, uint256 userPremiumDebt) = spoke1.getUserDebt(params.reserveId, alice);
-    assertEq(userBaseDebt, 0, 'aliceData base debt');
+    (uint256 userDrawnDebt, uint256 userPremiumDebt) = spoke1.getUserDebt(params.reserveId, alice);
+    assertEq(userDrawnDebt, 0, 'aliceData drawn debt');
     assertEq(userPremiumDebt, 0, 'aliceData premium debt');
     assertEq(aliceData[state.stage].data.suppliedShares, 0, 'aliceData supplied shares');
 
     // bob
-    (userBaseDebt, userPremiumDebt) = spoke1.getUserDebt(params.reserveId, bob);
-    assertEq(userBaseDebt, 0, 'bobData base debt');
+    (userDrawnDebt, userPremiumDebt) = spoke1.getUserDebt(params.reserveId, bob);
+    assertEq(userDrawnDebt, 0, 'bobData drawn debt');
     assertEq(userPremiumDebt, 0, 'bobData premium debt');
     assertEq(bobData[state.stage].data.suppliedShares, 0, 'bobData supplied shares');
 
@@ -329,17 +321,17 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     // Deal caller the balance to deposit, and approve hub
     deal(reserve.underlying, caller, assets);
     vm.prank(caller);
-    IERC20(reserve.underlying).approve(address(hub), assets);
+    IERC20(reserve.underlying).approve(address(hub1), assets);
 
     // Supply and confirm share amount from event emission
-    uint256 shares1 = hub.convertToSuppliedShares(reserve.assetId, assets);
+    uint256 shares1 = hub1.convertToAddedShares(reserve.assetId, assets);
     vm.expectEmit(address(spoke1));
     emit ISpokeBase.Supply(reserveId, caller, caller, shares1);
     vm.prank(caller);
     spoke1.supply(reserveId, assets, caller);
 
     // Withdraw and confirm share amount from event emission
-    uint256 shares2 = hub.convertToSuppliedShares(reserve.assetId, assets);
+    uint256 shares2 = hub1.convertToAddedShares(reserve.assetId, assets);
     vm.expectEmit(address(spoke1));
     emit ISpokeBase.Withdraw(reserveId, caller, caller, shares2);
     vm.prank(caller);
@@ -382,7 +374,7 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     // Deal caller the balance they will supply, and approve hub
     deal(reserve.underlying, caller, callerStartingBalance);
     vm.prank(caller);
-    IERC20(reserve.underlying).approve(address(hub), UINT256_MAX);
+    IERC20(reserve.underlying).approve(address(hub1), UINT256_MAX);
 
     // Set up initial state of caller by supplying their starting balance
     Utils.supply({
@@ -394,14 +386,14 @@ contract SpokeWithdrawScenarioTest is SpokeBase {
     });
 
     // Withdraw and confirm share amount from event emission
-    uint256 shares1 = hub.convertToSuppliedShares(reserve.assetId, assets);
+    uint256 shares1 = hub1.convertToAddedShares(reserve.assetId, assets);
     vm.expectEmit(address(spoke1));
     emit ISpokeBase.Withdraw(reserveId, caller, caller, shares1);
     vm.prank(caller);
     spoke1.withdraw(reserveId, assets, caller);
 
     // Supply and confirm share amount from event emission
-    uint256 shares2 = hub.convertToSuppliedShares(reserve.assetId, assets);
+    uint256 shares2 = hub1.convertToAddedShares(reserve.assetId, assets);
     vm.expectEmit(address(spoke1));
     emit ISpokeBase.Supply(reserveId, caller, caller, shares2);
     vm.prank(caller);

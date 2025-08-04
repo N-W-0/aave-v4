@@ -81,15 +81,15 @@ contract SpokeBorrowValidationTest is SpokeBase {
     spoke1.borrow(reserveId, 1, bob);
   }
 
-  function test_borrow_revertsWith_NotAvailableLiquidity() public {
-    test_borrow_fuzz_revertsWith_NotAvailableLiquidity({
+  function test_borrow_revertsWith_NotLiquidity() public {
+    test_borrow_fuzz_revertsWith_NotLiquidity({
       daiAmount: 100e18,
       wethAmount: 10e18,
       borrowAmount: 100e18 + 1
     });
   }
 
-  function test_borrow_fuzz_revertsWith_NotAvailableLiquidity(
+  function test_borrow_fuzz_revertsWith_NotLiquidity(
     uint256 daiAmount,
     uint256 wethAmount,
     uint256 borrowAmount
@@ -108,9 +108,7 @@ contract SpokeBorrowValidationTest is SpokeBase {
     Utils.supply(spoke1, daiReserveId, alice, daiAmount, alice);
 
     // Bob draw more than supplied dai amount
-    vm.expectRevert(
-      abi.encodeWithSelector(ILiquidityHub.NotAvailableLiquidity.selector, daiAmount)
-    );
+    vm.expectRevert(abi.encodeWithSelector(IHub.NotLiquidity.selector, daiAmount));
     vm.prank(bob);
     spoke1.borrow(daiReserveId, borrowAmount, bob);
   }
@@ -124,7 +122,7 @@ contract SpokeBorrowValidationTest is SpokeBase {
     reserveId = bound(reserveId, 0, spoke1.getReserveCount() - 1);
 
     // Bob draws 0
-    vm.expectRevert(ILiquidityHub.InvalidDrawAmount.selector);
+    vm.expectRevert(IHub.InvalidDrawAmount.selector);
     vm.prank(bob);
     spoke1.borrow(reserveId, 0, bob);
   }
@@ -143,11 +141,11 @@ contract SpokeBorrowValidationTest is SpokeBase {
     uint256 drawAmount = drawCap + 1;
 
     uint256 assetId = spoke1.getReserve(reserveId).assetId;
-    updateDrawCap(hub, assetId, address(spoke1), drawCap);
-    assertEq(hub.getSpoke(assetId, address(spoke1)).config.drawCap, drawCap);
+    updateDrawCap(hub1, assetId, address(spoke1), drawCap);
+    assertEq(hub1.getSpoke(assetId, address(spoke1)).config.drawCap, drawCap);
 
     // Bob borrow dai amount exceeding draw cap
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.DrawCapExceeded.selector, drawCap));
+    vm.expectRevert(abi.encodeWithSelector(IHub.DrawCapExceeded.selector, drawCap));
     vm.prank(bob);
     spoke1.borrow(reserveId, drawAmount, bob);
   }
@@ -167,8 +165,8 @@ contract SpokeBorrowValidationTest is SpokeBase {
     uint256 wethSupplyAmount = 10e18;
     uint256 drawAmount = drawCap - 1;
 
-    updateDrawCap(hub, daiAssetId, address(spoke1), drawCap);
-    assertEq(hub.getSpoke(daiAssetId, address(spoke1)).config.drawCap, drawCap);
+    updateDrawCap(hub1, daiAssetId, address(spoke1), drawCap);
+    assertEq(hub1.getSpoke(daiAssetId, address(spoke1)).config.drawCap, drawCap);
 
     // Bob supply weth collateral
     Utils.supplyCollateral(spoke1, wethReserveId, bob, wethSupplyAmount, bob);
@@ -188,7 +186,7 @@ contract SpokeBorrowValidationTest is SpokeBase {
     // Bob should be able to borrow 1 dai
     assertGt(spoke1.getHealthFactor(bob), HEALTH_FACTOR_LIQUIDATION_THRESHOLD);
 
-    vm.expectRevert(abi.encodeWithSelector(ILiquidityHub.DrawCapExceeded.selector, drawCap));
+    vm.expectRevert(abi.encodeWithSelector(IHub.DrawCapExceeded.selector, drawCap));
     Utils.borrow(spoke1, daiReserveId, bob, 1, bob);
   }
 }

@@ -19,7 +19,7 @@ contract SpokeMulticall is SpokeBase {
       daiReserveId,
       bob,
       bob,
-      hub.convertToSuppliedShares(daiAssetId, supplyAmount)
+      hub1.convertToAddedShares(daiAssetId, supplyAmount)
     );
     vm.expectEmit(address(spoke1));
     emit ISpoke.UsingAsCollateral(daiReserveId, bob, bob, true);
@@ -46,9 +46,9 @@ contract SpokeMulticall is SpokeBase {
     Utils.borrow(spoke2, _dai2ReserveId(spoke2), bob, 1000e18, bob);
 
     // Check bob's premium drawn shares as proxy for user rp
-    uint256 bobPremiumDrawnSharesBefore = spoke2
+    uint256 bobpremiumSharesBefore = spoke2
       .getUserPosition(_dai2ReserveId(spoke2), bob)
-      .premiumDrawnShares;
+      .premiumShares;
 
     // Set up the multicall
     bytes[] memory calls = new bytes[](3);
@@ -61,7 +61,7 @@ contract SpokeMulticall is SpokeBase {
       _daiReserveId(spoke2),
       bob,
       bob,
-      hub.convertToSuppliedShares(daiAssetId, MAX_SUPPLY_AMOUNT)
+      hub1.convertToAddedShares(daiAssetId, MAX_SUPPLY_AMOUNT)
     );
     vm.expectEmit(address(spoke2));
     emit ISpoke.UsingAsCollateral(_daiReserveId(spoke2), bob, bob, true);
@@ -72,13 +72,13 @@ contract SpokeMulticall is SpokeBase {
     vm.prank(bob);
     spoke2.multicall(calls);
 
-    uint256 bobPremiumDrawnSharesAfter = spoke2
+    uint256 bobpremiumSharesAfter = spoke2
       .getUserPosition(_dai2ReserveId(spoke2), bob)
-      .premiumDrawnShares;
+      .premiumShares;
 
     assertLt(
-      bobPremiumDrawnSharesAfter,
-      bobPremiumDrawnSharesBefore,
+      bobpremiumSharesAfter,
+      bobpremiumSharesBefore,
       'Bob premium drawn shares should decrease'
     );
   }
@@ -126,17 +126,17 @@ contract SpokeMulticall is SpokeBase {
     bytes[] memory calls = new bytes[](2);
     calls[0] = abi.encodeCall(
       ISpoke.addReserve,
-      (address(hub), daiAssetId, _deployMockPriceFeed(spoke1, 1e8), dai2Config, dai2DynConfig)
+      (address(hub1), daiAssetId, _deployMockPriceFeed(spoke1, 1e8), dai2Config, dai2DynConfig)
     );
     calls[1] = abi.encodeCall(
       ISpoke.addReserve,
-      (address(hub), daiAssetId, _deployMockPriceFeed(spoke1, 1e8), dai3Config, dai3DynConfig)
+      (address(hub1), daiAssetId, _deployMockPriceFeed(spoke1, 1e8), dai3Config, dai3DynConfig)
     );
 
     vm.expectEmit(address(spoke1));
-    emit ISpoke.ReserveAdded(dai2ReserveId, daiAssetId, address(hub));
+    emit ISpoke.ReserveAdded(dai2ReserveId, daiAssetId, address(hub1));
     vm.expectEmit(address(spoke1));
-    emit ISpoke.ReserveAdded(dai3ReserveId, daiAssetId, address(hub));
+    emit ISpoke.ReserveAdded(dai3ReserveId, daiAssetId, address(hub1));
 
     // Execute the multicall
     vm.prank(SPOKE_ADMIN);

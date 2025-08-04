@@ -4,14 +4,14 @@ pragma solidity ^0.8.0;
 import {DataTypes} from 'src/libraries/types/DataTypes.sol';
 
 import {IAccessManaged} from 'src/dependencies/openzeppelin/IAccessManaged.sol';
-import {ILiquidityHubBase} from 'src/interfaces/ILiquidityHubBase.sol';
+import {IHubBase} from 'src/interfaces/IHubBase.sol';
 
 /**
- * @title ILiquidityHub
+ * @title IHub
  * @author Aave Labs
- * @notice Full interface for LiquidityHub
+ * @notice Full interface for Hub
  */
-interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
+interface IHub is IHubBase, IAccessManaged {
   event SpokeAdded(uint256 indexed assetId, address indexed spoke);
   event AssetAdded(uint256 indexed assetId, address indexed underlying, uint8 decimals);
   event AssetConfigUpdated(uint256 indexed assetId, DataTypes.AssetConfig config);
@@ -23,10 +23,10 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
   event AssetUpdated(
     uint256 indexed assetId,
     uint256 drawnIndex,
-    uint256 baseBorrowRate,
+    uint256 drawnRate,
     uint256 latestUpdateTimestamp
   );
-  event RefreshPremiumDebt(
+  event RefreshPremium(
     uint256 indexed assetId,
     address indexed spoke,
     DataTypes.PremiumDelta premiumDelta
@@ -34,12 +34,12 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
   event DeficitReported(
     uint256 indexed assetId,
     address indexed spoke,
-    uint256 baseRestoredShares,
+    uint256 drawnShares,
     DataTypes.PremiumDelta premiumDelta,
-    uint256 totalRestoredAmount
+    uint256 drawnAmount
   );
   event AccrueFees(uint256 indexed assetId, uint256 shares);
-  event TransferShares(uint256 indexed assetId, uint256 shares, address fromSpoke, address toSpoke);
+  event TransferShares(uint256 indexed assetId, uint256 shares, address sender, address receiver);
 
   /**
    * @notice Emitted when some deficit is eliminated.
@@ -60,12 +60,12 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
   error InvalidFromAddress();
   error InvalidToAddress();
   error AssetNotListed();
-  error SupplyCapExceeded(uint256 supplyCap);
+  error AddCapExceeded(uint256 addCap);
   error InvalidRemoveAmount();
   error InvalidRestoreAmount();
-  error SuppliedAmountExceeded(uint256 suppliedAmount);
-  error SuppliedSharesExceeded(uint256 suppliedShares);
-  error NotAvailableLiquidity(uint256 availableLiquidity);
+  error AddedAmountExceeded(uint256 addedAmount);
+  error AddedSharesExceeded(uint256 addedShares);
+  error NotLiquidity(uint256 liquidity);
   error InvalidDrawAmount();
   error DrawCapExceeded(uint256 drawCap);
   error SurplusAmountRestored(uint256 maxAllowedRestore);
@@ -76,7 +76,7 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
   error InvalidAssetDecimals();
   error InvalidLiquidityFee();
   error InvalidUnderlying();
-  error InvalidDebtChange();
+  error InvalidPremiumChange();
   error InvalidDeficitAmount();
   error InvalidFeeReceiver();
   error SurplusDeficitReported(uint256 amount);
@@ -125,16 +125,13 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
   function setInterestRateData(uint256 assetId, bytes calldata data) external;
 
   /**
-   * @notice Refreshes premium debt accounting.
+   * @notice Refreshes premium accounting.
    * @dev Only callable by active spokes, reverts with `SpokeNotActive` otherwise.
-   * @dev Overall premium debt should not decrease, reverts with `InvalidDebtChange` otherwise.
+   * @dev Overall premium should not decrease, reverts with `InvalidPremiumChange` otherwise.
    * @param assetId The identifier of the asset.
-   * @param premiumDelta The change in premium debt.
+   * @param premiumDelta The change in premium.
    */
-  function refreshPremiumDebt(
-    uint256 assetId,
-    DataTypes.PremiumDelta calldata premiumDelta
-  ) external;
+  function refreshPremium(uint256 assetId, DataTypes.PremiumDelta calldata premiumDelta) external;
 
   /**
    * @notice Pay existing liquidity to feeReceiver.
@@ -148,14 +145,14 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
    * @notice Reports deficit.
    * @dev Only callable by active spokes.
    * @param assetId The identifier of the asset.
-   * @param baseAmount The base debt to report as deficit.
-   * @param premiumAmount The premium debt to report as deficit.
-   * @param premiumDelta The premium debt delta to apply which signal premium debt deficit.
-   * @return The amount of base debt shares reported as deficit.
+   * @param drawnAmount The drawn amount to report as deficit.
+   * @param premiumAmount The premium amount to report as deficit.
+   * @param premiumDelta The premium delta to apply which signal premium deficit.
+   * @return The amount of drawn shares reported as deficit.
    */
   function reportDeficit(
     uint256 assetId,
-    uint256 baseAmount,
+    uint256 drawnAmount,
     uint256 premiumAmount,
     DataTypes.PremiumDelta calldata premiumDelta
   ) external returns (uint256);
@@ -257,7 +254,7 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
    * @param shares The amount of supplied shares to convert to assets amount.
    * @return The amount of supplied assets converted from shares amount.
    */
-  function convertToSuppliedAssets(uint256 assetId, uint256 shares) external view returns (uint256);
+  function convertToAddedAssets(uint256 assetId, uint256 shares) external view returns (uint256);
 
   /**
    * @notice Converts the specified amount of supplied assets to shares amount.
@@ -266,7 +263,7 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
    * @param assets The amount of supplied assets to convert to shares amount.
    * @return The amount of supplied shares converted from assets amount.
    */
-  function convertToSuppliedShares(uint256 assetId, uint256 assets) external view returns (uint256);
+  function convertToAddedShares(uint256 assetId, uint256 assets) external view returns (uint256);
 
   /**
    * @notice Converts the specified amount of drawn shares to assets amount.
@@ -293,27 +290,32 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
    */
   function getAssetDrawnIndex(uint256 assetId) external view returns (uint256);
 
+  /**
+   * @notice Returns the current drawn rate of the specified asset.
+   * @param assetId The identifier of the asset.
+   * @return The current drawn rate of the asset.
+   */
+  function getAssetDrawnRate(uint256 assetId) external view returns (uint256);
+
   function getAsset(uint256 assetId) external view returns (DataTypes.Asset memory);
 
   function getAssetConfig(uint256 assetId) external view returns (DataTypes.AssetConfig memory);
 
-  function getAssetDebt(uint256 assetId) external view returns (uint256, uint256);
+  function getAssetOwed(uint256 assetId) external view returns (uint256, uint256);
 
-  function getAssetSuppliedAmount(uint256 assetId) external view returns (uint256);
+  function getAssetAddedAmount(uint256 assetId) external view returns (uint256);
 
-  function getAssetSuppliedShares(uint256 assetId) external view returns (uint256);
+  function getAssetAddedShares(uint256 assetId) external view returns (uint256);
 
-  function getAssetTotalDebt(uint256 assetId) external view returns (uint256);
+  function getAssetTotalOwed(uint256 assetId) external view returns (uint256);
 
-  function getTotalSuppliedAssets(uint256 assetId) external view returns (uint256);
+  function getTotalAddedAssets(uint256 assetId) external view returns (uint256);
 
-  function getTotalSuppliedShares(uint256 assetId) external view returns (uint256);
+  function getTotalAddedShares(uint256 assetId) external view returns (uint256);
 
-  function getAvailableLiquidity(uint256 assetId) external view returns (uint256);
+  function getLiquidity(uint256 assetId) external view returns (uint256);
 
   function getDeficit(uint256 assetId) external view returns (uint256);
-
-  function getBaseInterestRate(uint256 assetId) external view returns (uint256);
 
   function getSpokeCount(uint256 assetId) external view returns (uint256);
 
@@ -331,13 +333,13 @@ interface ILiquidityHub is ILiquidityHubBase, IAccessManaged {
     address spoke
   ) external view returns (DataTypes.SpokeConfig memory);
 
-  function getSpokeDebt(uint256 assetId, address spoke) external view returns (uint256, uint256);
+  function getSpokeOwed(uint256 assetId, address spoke) external view returns (uint256, uint256);
 
-  function getSpokeSuppliedAmount(uint256 assetId, address spoke) external view returns (uint256);
+  function getSpokeAddedAmount(uint256 assetId, address spoke) external view returns (uint256);
 
-  function getSpokeSuppliedShares(uint256 assetId, address spoke) external view returns (uint256);
+  function getSpokeAddedShares(uint256 assetId, address spoke) external view returns (uint256);
 
-  function getSpokeTotalDebt(uint256 assetId, address spoke) external view returns (uint256);
+  function getSpokeTotalOwed(uint256 assetId, address spoke) external view returns (uint256);
 
   function getAssetCount() external view returns (uint256);
 

@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import {Ownable} from 'src/dependencies/openzeppelin/Ownable.sol';
 import {SafeERC20} from 'src/dependencies/openzeppelin/SafeERC20.sol';
 import {IERC20} from 'src/dependencies/openzeppelin/IERC20.sol';
-import {ILiquidityHub} from 'src/interfaces/ILiquidityHub.sol';
+import {IHub} from 'src/interfaces/IHub.sol';
 import {ITreasurySpoke, ISpokeBase} from 'src/interfaces/ITreasurySpoke.sol';
 
 /**
@@ -18,17 +18,17 @@ contract TreasurySpoke is ITreasurySpoke, Ownable {
   using SafeERC20 for IERC20;
 
   /// @inheritdoc ITreasurySpoke
-  ILiquidityHub public immutable HUB;
+  IHub public immutable HUB;
 
   /**
    * @dev Constructor
    * @param owner_ The address of the owner
-   * @param hub_ The address of the LiquidityHub
+   * @param hub_ The address of the Hub
    */
   constructor(address owner_, address hub_) Ownable(owner_) {
     require(hub_ != address(0), InvalidHubAddress());
 
-    HUB = ILiquidityHub(hub_);
+    HUB = IHub(hub_);
   }
 
   /// @inheritdoc ITreasurySpoke
@@ -40,7 +40,7 @@ contract TreasurySpoke is ITreasurySpoke, Ownable {
   function withdraw(uint256 reserveId, uint256 amount, address) external onlyOwner {
     // If uint256.max is passed, withdraw all supplied assets
     if (amount == type(uint256).max) {
-      amount = HUB.getSpokeSuppliedAmount(reserveId, address(this));
+      amount = HUB.getSpokeAddedAmount(reserveId, address(this));
     }
 
     HUB.remove(reserveId, amount, msg.sender);
@@ -53,12 +53,12 @@ contract TreasurySpoke is ITreasurySpoke, Ownable {
 
   /// @inheritdoc ITreasurySpoke
   function getSuppliedAmount(uint256 reserveId) external view returns (uint256) {
-    return HUB.getSpokeSuppliedAmount(reserveId, address(this));
+    return HUB.getSpokeAddedAmount(reserveId, address(this));
   }
 
   /// @inheritdoc ITreasurySpoke
   function getSuppliedShares(uint256 reserveId) external view returns (uint256) {
-    return HUB.getSpokeSuppliedShares(reserveId, address(this));
+    return HUB.getSpokeAddedShares(reserveId, address(this));
   }
 
   /// @inheritdoc ISpokeBase
