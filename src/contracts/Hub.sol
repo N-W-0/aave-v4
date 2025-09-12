@@ -337,6 +337,8 @@ contract Hub is IHub, AccessManaged {
     // no premium change allowed
     _applyPremiumDelta(assetId, asset, spoke, premiumDelta, 0);
 
+    asset.updateDrawnRate(assetId);
+
     emit RefreshPremium(assetId, msg.sender, premiumDelta);
   }
 
