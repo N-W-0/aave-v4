@@ -66,8 +66,7 @@ library AssetLogic {
         .calculatePremiumRay({
           premiumShares: asset.premiumShares,
           drawnIndex: drawnIndex,
-          premiumOffsetRay: asset.premiumOffsetRay,
-          realizedPremiumRay: asset.realizedPremiumRay
+          premiumOffsetRay: asset.premiumOffsetRay
         })
         .fromRayUp();
   }
@@ -81,13 +80,13 @@ library AssetLogic {
   function totalAddedAssets(IHub.Asset storage asset) internal view returns (uint256) {
     uint256 drawnIndex = asset.getDrawnIndex();
 
-    uint256 premiumRay = Premium.calculatePremiumRay({
+    uint256 aggregatedOwedRay = _calculateAggregatedOwedRay({
+      drawnShares: asset.drawnShares,
       premiumShares: asset.premiumShares,
-      drawnIndex: drawnIndex,
       premiumOffsetRay: asset.premiumOffsetRay,
-      realizedPremiumRay: asset.realizedPremiumRay
+      deficitRay: asset.deficitRay,
+      drawnIndex: drawnIndex
     });
-    uint256 aggregatedOwedRay = (asset.drawnShares * drawnIndex) + premiumRay + asset.deficitRay;
 
     return
       asset.liquidity +
@@ -191,32 +190,45 @@ library AssetLogic {
     }
 
     uint120 drawnShares = asset.drawnShares;
-
     uint120 premiumShares = asset.premiumShares;
-    uint256 premiumOffsetRay = asset.premiumOffsetRay;
-    uint256 realizedPremiumRay = asset.realizedPremiumRay;
+    int256 premiumOffsetRay = asset.premiumOffsetRay;
     uint256 deficitRay = asset.deficitRay;
 
-    uint256 aggregatedOwedRayAfter = (drawnShares * drawnIndex) +
-      Premium.calculatePremiumRay({
-        premiumShares: premiumShares,
-        drawnIndex: drawnIndex,
-        premiumOffsetRay: premiumOffsetRay,
-        realizedPremiumRay: realizedPremiumRay
-      }) +
-      deficitRay;
-    uint256 aggregatedOwedRayBefore = (drawnShares * previousIndex) +
-      Premium.calculatePremiumRay({
-        premiumShares: premiumShares,
-        drawnIndex: previousIndex,
-        premiumOffsetRay: premiumOffsetRay,
-        realizedPremiumRay: realizedPremiumRay
-      }) +
-      deficitRay;
+    uint256 aggregatedOwedRayAfter = _calculateAggregatedOwedRay({
+      drawnShares: drawnShares,
+      premiumShares: premiumShares,
+      premiumOffsetRay: premiumOffsetRay,
+      deficitRay: deficitRay,
+      drawnIndex: drawnIndex
+    });
+
+    uint256 aggregatedOwedRayBefore = _calculateAggregatedOwedRay({
+      drawnShares: drawnShares,
+      premiumShares: premiumShares,
+      premiumOffsetRay: premiumOffsetRay,
+      deficitRay: deficitRay,
+      drawnIndex: previousIndex
+    });
 
     return
       (aggregatedOwedRayAfter.fromRayUp() - aggregatedOwedRayBefore.fromRayUp()).percentMulDown(
         liquidityFee
       );
+  }
+
+  /// @notice Calculates the aggregated owed amount for a specified asset, expressed in asset units and scaled by RAY.
+  function _calculateAggregatedOwedRay(
+    uint256 drawnShares,
+    uint256 premiumShares,
+    int256 premiumOffsetRay,
+    uint256 deficitRay,
+    uint256 drawnIndex
+  ) internal pure returns (uint256) {
+    uint256 premiumRay = Premium.calculatePremiumRay({
+      premiumShares: premiumShares,
+      premiumOffsetRay: premiumOffsetRay,
+      drawnIndex: drawnIndex
+    });
+    return (drawnShares * drawnIndex) + premiumRay + deficitRay;
   }
 }
