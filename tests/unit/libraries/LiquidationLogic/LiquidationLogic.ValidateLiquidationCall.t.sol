@@ -14,17 +14,15 @@ contract LiquidationLogicValidateLiquidationCallTest is LiquidationLogicBaseTest
       user: alice,
       liquidator: bob,
       debtToCover: 5e18,
-      collateralReserveHub: address(hub1),
-      debtReserveHub: address(hub1),
       collateralReservePaused: false,
       debtReservePaused: false,
       receiveShares: false,
       collateralReserveFrozen: false,
       healthFactor: 0.8e18,
-      collateralReserveId: collateralReserveId,
       collateralFactor: 75_00,
       collateralReserveBalance: 120e6,
-      debtReserveBalance: 100e18
+      debtReserveBalance: 100e18,
+      isUsingAsCollateral: true
     });
     liquidationLogicWrapper.setBorrower(params.user);
     liquidationLogicWrapper.setLiquidator(params.liquidator);
@@ -116,7 +114,7 @@ contract LiquidationLogicValidateLiquidationCallTest is LiquidationLogicBaseTest
   function test_validateLiquidationCall_revertsWith_CollateralCannotBeLiquidated_NotUsingAsCollateral()
     public
   {
-    liquidationLogicWrapper.setBorrowerCollateralStatus(collateralReserveId, false);
+    params.isUsingAsCollateral = false;
     vm.expectRevert(ISpoke.CollateralCannotBeLiquidated.selector);
     liquidationLogicWrapper.validateLiquidationCall(params);
   }
