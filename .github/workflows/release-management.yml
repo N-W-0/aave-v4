@@ -1,0 +1,58 @@
+name: Release Management
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ '**/package.json', '**/Cargo.toml', 'ecosystem.json' ]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  manage-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Install dependencies
+      run: |
+        npm install -g semver @octokit/rest
+        
+    - name: Determine version bump
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "release_type=${{ github.event.inputs.release_type }}" >> $GITHUB_OUTPUT
+        else
+          # Auto-determine based on conventional commits
+          echo "release_type=patch" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Create release
+      run: |
+        node scripts/create-release.js ${{ steps.version.outputs.release_type }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Update ecosystem documentation
+      run: |
+        node scripts/update-ecosystem-docs.js
